@@ -8,6 +8,11 @@ from pydantic import BaseModel
 from openai import OpenAI
 from pypdf import PdfReader
 
+# Import database Base for Alembic to discover models
+from database import Base, SessionLocal
+import models  # Import models so Alembic can see them
+from auth import hash_password
+
 app = FastAPI(title="Group Chat Prototype")
 
 app.add_middleware(
@@ -17,6 +22,105 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def init_demo_data():
+    """
+    Initialize demo data in the database if it's empty.
+    Only runs if no users exist in the database.
+    """
+    db = SessionLocal()
+    try:
+        # Check if any users exist
+        existing_user = db.query(models.User).first()
+        if existing_user:
+            print("Database already has data. Skipping demo data initialization.")
+            return
+
+        print("Initializing demo data...")
+
+        # Create Users
+        # 1 coordinator
+        coordinator = models.User(
+            username="coordinator",
+            password_hash=hash_password("coordinator1"),
+            role="coordinator"
+        )
+        db.add(coordinator)
+
+        # 2 supervisors
+        supervisor1 = models.User(
+            username="supervisor1",
+            password_hash=hash_password("supervisor1"),
+            role="supervisor"
+        )
+        supervisor2 = models.User(
+            username="supervisor2",
+            password_hash=hash_password("supervisor2"),
+            role="supervisor"
+        )
+        db.add(supervisor1)
+        db.add(supervisor2)
+
+        # 8 students
+        students = []
+        for i in range(1, 9):
+            student = models.User(
+                username=f"student{i}",
+                password_hash=hash_password(f"student{i}"),
+                role="student"
+            )
+            students.append(student)
+            db.add(student)
+
+        # Flush to get IDs assigned
+        db.flush()
+
+        # Create Groups
+        group1 = models.Group(name="Group 1")
+        group2 = models.Group(name="Group 2")
+        group3 = models.Group(name="Group 3")
+        group4 = models.Group(name="Group 4")
+        db.add_all([group1, group2, group3, group4])
+        db.flush()
+
+        # Create Group Memberships
+        # Group 1: supervisor1, student1, student2
+        db.add(models.GroupMember(user_id=supervisor1.id, group_id=group1.id))
+        db.add(models.GroupMember(user_id=students[0].id, group_id=group1.id))
+        db.add(models.GroupMember(user_id=students[1].id, group_id=group1.id))
+
+        # Group 2: supervisor1, student3, student4
+        db.add(models.GroupMember(user_id=supervisor1.id, group_id=group2.id))
+        db.add(models.GroupMember(user_id=students[2].id, group_id=group2.id))
+        db.add(models.GroupMember(user_id=students[3].id, group_id=group2.id))
+
+        # Group 3: supervisor2, student5, student6
+        db.add(models.GroupMember(user_id=supervisor2.id, group_id=group3.id))
+        db.add(models.GroupMember(user_id=students[4].id, group_id=group3.id))
+        db.add(models.GroupMember(user_id=students[5].id, group_id=group3.id))
+
+        # Group 4: supervisor2, student7, student8
+        db.add(models.GroupMember(user_id=supervisor2.id, group_id=group4.id))
+        db.add(models.GroupMember(user_id=students[6].id, group_id=group4.id))
+        db.add(models.GroupMember(user_id=students[7].id, group_id=group4.id))
+
+        # Commit all changes
+        db.commit()
+        print("Demo data initialized successfully!")
+
+    except Exception as e:
+        db.rollback()
+        print(f"Error initializing demo data: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Run initialization tasks when the app starts."""
+    init_demo_data()
 
 # Initialize OpenAI client with API key from environment variable
 openai_api_key = os.getenv("OPENAI_API_KEY")

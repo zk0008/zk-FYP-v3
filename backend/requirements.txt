@@ -3,4 +3,9 @@ uvicorn[standard]
 openai
 python-multipart
 pypdf
+sqlalchemy
+python-dotenv
+psycopg2-binary
+passlib[bcrypt]
+PyJWT
 
