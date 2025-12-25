@@ -2,7 +2,8 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 from passlib.context import CryptContext
-import jwt
+#import jwt
+from jose import JWTError, jwt
 from dotenv import load_dotenv
 
 # Load environment variables from .env file

@@ -1,17 +1,18 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import OpenAI
 from pypdf import PdfReader
+from sqlalchemy.orm import Session
 
 # Import database Base for Alembic to discover models
-from database import Base, SessionLocal
+from database import Base, SessionLocal, get_db
 import models  # Import models so Alembic can see them
-from auth import hash_password
+from auth import hash_password, decode_token, verify_password, create_access_token
 
 app = FastAPI(title="Group Chat Prototype")
 
@@ -151,18 +152,35 @@ groups = {
             {"id": 1, "sender": "Charlie", "text": "Who's ready for lunch?", "is_bot": False},
         ],
     },
+    "group-c": {
+        "id": "group-c",
+        "name": "Group 3",
+        "messages": [],
+    },
+    "group-d": {
+        "id": "group-d",
+        "name": "Group 4",
+        "messages": [],
+    },
 }
 
 # In-memory storage for PDF metadata: {group_id: [{"id": int, "filename": str, "uploaded_at": str, "file_path": str}, ...]}
 group_documents = {
     "group-a": [],
     "group-b": [],
+    "group-c": [],
+    "group-d": [],
 }
 
 
 class NewMessage(BaseModel):
     sender: str
     text: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 
 def extract_text_from_pdfs(group_id: str) -> str:
@@ -265,24 +283,207 @@ def generate_ai_reply(group_id: str, question: str, next_message_id: int):
         group["messages"].append(ai_response)
 
 
+# Authentication dependency
+def get_current_user(
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+) -> models.User:
+    """
+    Dependency to get the current authenticated user from JWT token.
+    Expects Authorization header in format: "Bearer <token>"
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+    
+    try:
+        # Extract token from "Bearer <token>"
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid authentication scheme")
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+    
+    # Decode token
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    # Get username from token (assuming it's stored as "sub" or "username")
+    username = payload.get("sub") or payload.get("username")
+    if not username:
+        raise HTTPException(status_code=401, detail="Token missing username")
+    
+    # Get user from database
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    return user
+
+
+@app.post("/auth/login")
+def login(login_data: LoginRequest, db: Session = Depends(get_db)):
+    """
+    Login endpoint that verifies username and password, then returns a JWT token.
+    """
+    # Find user by username
+    user = db.query(models.User).filter(models.User.username == login_data.username).first()
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    
+    # Verify password
+    if not verify_password(login_data.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    
+    # Create access token with username in the payload
+    access_token = create_access_token(data={"sub": user.username}, expires_minutes=60)
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
+
+@app.get("/auth/me")
+def get_current_user_info(current_user: models.User = Depends(get_current_user)):
+    """
+    Get the current logged-in user's username and role.
+    """
+    return {
+        "username": current_user.username,
+        "role": current_user.role
+    }
+
+
+@app.get("/my-groups")
+def get_my_groups(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get groups the current user is allowed to see.
+    Returns in-memory groups (with string IDs like "group-a") that match database groups.
+    - Coordinator: sees all groups
+    - Supervisor: sees only groups they are a member of
+    - Student: sees only their own group
+    """
+    # Map database group IDs to in-memory group keys
+    # Database Group 1 -> "group-a", Group 2 -> "group-b", Group 3 -> "group-c", Group 4 -> "group-d"
+    db_to_mem_map = {
+        1: "group-a",
+        2: "group-b",
+        3: "group-c",
+        4: "group-d",
+    }
+    
+    if current_user.role == "coordinator":
+        # Coordinator sees all in-memory groups
+        return list(groups.values())
+    
+    elif current_user.role == "supervisor":
+        # Supervisor sees groups they are a member of (map database groups to in-memory groups)
+        group_memberships = db.query(models.GroupMember).filter(
+            models.GroupMember.user_id == current_user.id
+        ).all()
+        db_group_ids = {membership.group.id for membership in group_memberships}
+        
+        # Map database group IDs to in-memory groups
+        result = []
+        for db_group_id in db_group_ids:
+            mem_key = db_to_mem_map.get(db_group_id)
+            if mem_key and mem_key in groups:
+                result.append(groups[mem_key])
+        return result
+    
+    elif current_user.role == "student":
+        # Student sees only their own group
+        group_membership = db.query(models.GroupMember).filter(
+            models.GroupMember.user_id == current_user.id
+        ).first()
+        if group_membership:
+            # Map database group ID to in-memory group
+            db_group_id = group_membership.group.id
+            mem_key = db_to_mem_map.get(db_group_id)
+            if mem_key and mem_key in groups:
+                return [groups[mem_key]]
+        return []
+    
+    else:
+        raise HTTPException(status_code=403, detail="Unknown user role")
+
+
 @app.get("/groups")
 def list_groups():
     return list(groups.values())
 
 
+def check_group_access(group_id: str, current_user: models.User, db: Session) -> bool:
+    """
+    Check if the current user has access to the specified group.
+    Returns True if access is allowed, False otherwise.
+    """
+    # Check if group exists in in-memory groups
+    if group_id not in groups:
+        return False
+    
+    # Coordinator has access to all groups
+    if current_user.role == "coordinator":
+        return True
+    
+    # Map in-memory group_id to database group ID
+    # "group-a" -> 1, "group-b" -> 2, "group-c" -> 3, "group-d" -> 4
+    mem_to_db_map = {
+        "group-a": 1,
+        "group-b": 2,
+        "group-c": 3,
+        "group-d": 4,
+    }
+    db_group_id = mem_to_db_map.get(group_id)
+    if not db_group_id:
+        return False
+    
+    # Check if user is a member of this group
+    membership = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == current_user.id,
+        models.GroupMember.group_id == db_group_id
+    ).first()
+    
+    return membership is not None
+
+
 @app.get("/groups/{group_id}/messages")
-def list_messages(group_id: str):
+def list_messages(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     group = groups.get(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+    
     return group["messages"]
 
 
 @app.post("/groups/{group_id}/messages")
-def add_message(group_id: str, message: NewMessage, background_tasks: BackgroundTasks):
+def add_message(
+    group_id: str,
+    message: NewMessage,
+    background_tasks: BackgroundTasks,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     group = groups.get(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
 
     # Save the user message with is_bot = False
     next_id = (group["messages"][-1]["id"] + 1) if group["messages"] else 1
@@ -305,11 +506,19 @@ def add_message(group_id: str, message: NewMessage, background_tasks: Background
 
 
 @app.get("/groups/{group_id}/documents")
-def list_documents(group_id: str):
+def list_documents(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """List all PDF documents for a group"""
     group = groups.get(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
     
     # Return documents for this group (or empty list if none)
     documents = group_documents.get(group_id, [])
@@ -317,11 +526,20 @@ def list_documents(group_id: str):
 
 
 @app.post("/groups/{group_id}/documents")
-async def upload_document(group_id: str, file: UploadFile = File(...)):
+async def upload_document(
+    group_id: str,
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Upload a PDF document for a group"""
     group = groups.get(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
     
     # Validate file type
     if not file.filename.endswith('.pdf'):
