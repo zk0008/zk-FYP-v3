@@ -4,6 +4,14 @@ import "./App.css";
 const API_BASE = "http://127.0.0.1:8000";
 
 function App() {
+    // Authentication state
+    const [token, setToken] = useState(localStorage.getItem("token") || null);
+    const [user, setUser] = useState(null);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [loginError, setLoginError] = useState("");
+    const [loginLoading, setLoginLoading] = useState(false);
+
+    // App state
     const [groups, setGroups] = useState([]);
     const [selectedGroup, setSelectedGroup] = useState(null);
     const [messages, setMessages] = useState([]);
@@ -17,20 +25,117 @@ function App() {
     const pollingIntervalRef = useRef(null);
     const pollingTimeoutRef = useRef(null);
 
+    // Helper function for authenticated API calls
+    const authFetch = (url, options = {}) => {
+        const headers = {
+            ...options.headers,
+            Authorization: `Bearer ${token}`,
+        };
+        return fetch(url, { ...options, headers });
+    };
+
+    // Login function
+    const handleLogin = async (username, password) => {
+        setLoginLoading(true);
+        setLoginError("");
+
+        try {
+            const response = await fetch(`${API_BASE}/auth/login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password }),
+            });
+
+            if (!response.ok) {
+                throw new Error("Invalid username or password");
+            }
+
+            const data = await response.json();
+            const accessToken = data.access_token;
+
+            // Store token in localStorage FIRST
+            localStorage.setItem("token", accessToken);
+            setToken(accessToken);
+
+            // Only after saving token, fetch user info and groups
+            // Read token from localStorage to ensure it's available
+            const savedToken = localStorage.getItem("token");
+            await loadUserData(savedToken);
+        } catch (err) {
+            setLoginError(err.message || "Login failed");
+            setLoginLoading(false);
+            // Clear token on error
+            localStorage.removeItem("token");
+            setToken(null);
+        }
+    };
+
+    // Load user data and groups after login
+    const loadUserData = async (authToken) => {
+        try {
+            // Fetch user info - use token from parameter, not from state
+            const userResponse = await fetch(`${API_BASE}/auth/me`, {
+                headers: { Authorization: `Bearer ${authToken}` },
+            });
+            if (!userResponse.ok) throw new Error("Failed to load user info");
+            const userData = await userResponse.json();
+            setUser(userData);
+
+            // Fetch groups - use token from parameter, not from state
+            const groupsResponse = await fetch(`${API_BASE}/my-groups`, {
+                headers: { Authorization: `Bearer ${authToken}` },
+            });
+            if (!groupsResponse.ok) throw new Error("Failed to load groups");
+            const groupsData = await groupsResponse.json();
+            setGroups(groupsData);
+
+            setIsAuthenticated(true);
+            setLoginLoading(false);
+        } catch (err) {
+            setLoginError(err.message || "Failed to load data");
+            setLoginLoading(false);
+            // Clear token on error
+            localStorage.removeItem("token");
+            setToken(null);
+        }
+    };
+
+    // Logout function
+    const handleLogout = () => {
+        localStorage.removeItem("token");
+        setToken(null);
+        setUser(null);
+        setIsAuthenticated(false);
+        setGroups([]);
+        setSelectedGroup(null);
+        setMessages([]);
+        setError("");
+    };
+
+    // Check for token on mount and auto-login
     useEffect(() => {
-        fetch(`${API_BASE}/groups`)
-            .then((res) => res.json())
-            .then(setGroups)
-            .catch(() => setError("Failed to load groups"));
-    }, []);
+        if (token && !isAuthenticated) {
+            loadUserData(token);
+        }
+    }, [token]);
+
+    // Load groups when authenticated
+    useEffect(() => {
+        if (isAuthenticated && token) {
+            authFetch(`${API_BASE}/my-groups`)
+                .then((res) => res.json())
+                .then(setGroups)
+                .catch(() => setError("Failed to load groups"));
+        }
+    }, [isAuthenticated, token]);
 
     useEffect(() => {
-        if (!selectedGroup) {
+        if (!selectedGroup || !token) {
             setMessages([]);
             return;
         }
         setLoadingMessages(true);
-        fetch(`${API_BASE}/groups/${selectedGroup.id}/messages`)
+        authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`)
             .then((res) => res.json())
             .then((data) => {
                 setMessages(data);
@@ -40,7 +145,7 @@ function App() {
                 setError("Failed to load messages");
                 setLoadingMessages(false);
             });
-    }, [selectedGroup]);
+    }, [selectedGroup, token]);
 
     // Cleanup polling intervals on unmount or when group changes
     useEffect(() => {
@@ -58,9 +163,9 @@ function App() {
 
     // Fetch documents when Documents tab is active and group is selected
     useEffect(() => {
-        if (activeTab === "Documents" && selectedGroup) {
+        if (activeTab === "Documents" && selectedGroup && token) {
             setLoadingDocuments(true);
-            fetch(`${API_BASE}/groups/${selectedGroup.id}/documents`)
+            authFetch(`${API_BASE}/groups/${selectedGroup.id}/documents`)
                 .then((res) => res.json())
                 .then((data) => {
                     setDocuments(data);
@@ -73,7 +178,7 @@ function App() {
         } else {
             setDocuments([]);
         }
-    }, [activeTab, selectedGroup]);
+    }, [activeTab, selectedGroup, token]);
 
     const handleSelectGroup = (group) => {
         setSelectedGroup(group);
@@ -102,10 +207,13 @@ function App() {
         setNewMessage("");
 
         // Send POST request
-        fetch(`${API_BASE}/groups/${selectedGroup.id}/messages`, {
+        authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sender: "Supervisor", text: messageText }),
+            body: JSON.stringify({
+                sender: user?.username || "User",
+                text: messageText,
+            }),
         })
             .then((res) => res.json())
             .then((createdMessage) => {
@@ -143,8 +251,7 @@ function App() {
         // Poll every 1 second
         pollingIntervalRef.current = setInterval(() => {
             pollCount++;
-
-            fetch(`${API_BASE}/groups/${selectedGroup.id}/messages`)
+            authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`)
                 .then((res) => res.json())
                 .then((allMessages) => {
                     // Check if there's a new AI bot message after our last message
@@ -217,7 +324,7 @@ function App() {
         const formData = new FormData();
         formData.append("file", file);
 
-        fetch(`${API_BASE}/groups/${selectedGroup.id}/documents`, {
+        authFetch(`${API_BASE}/groups/${selectedGroup.id}/documents`, {
             method: "POST",
             body: formData,
         })
@@ -241,11 +348,72 @@ function App() {
         );
     };
 
+    // Login component
+    const LoginPage = () => {
+        const [username, setUsername] = useState("");
+        const [password, setPassword] = useState("");
+
+        const handleSubmit = (e) => {
+            e.preventDefault();
+            handleLogin(username, password);
+        };
+
+        return (
+            <div className="login-container">
+                <div className="login-box">
+                    <h2>Login</h2>
+                    <form onSubmit={handleSubmit}>
+                        <div className="login-field">
+                            <label>Username</label>
+                            <input
+                                type="text"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                required
+                                disabled={loginLoading}
+                            />
+                        </div>
+                        <div className="login-field">
+                            <label>Password</label>
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                required
+                                disabled={loginLoading}
+                            />
+                        </div>
+                        {loginError && (
+                            <p className="error-text">{loginError}</p>
+                        )}
+                        <button
+                            type="submit"
+                            disabled={loginLoading}
+                            className="login-button"
+                        >
+                            {loginLoading ? "Logging in..." : "Login"}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    };
+
+    // Show login page if not authenticated
+    if (!isAuthenticated) {
+        return <LoginPage />;
+    }
+
     return (
         <div className="app-shell">
             <header className="top-bar">
                 <div className="brand">Supervisor Dashboard</div>
-                <div className="welcome">Welcome, Name!</div>
+                <div className="welcome">
+                    Welcome, {user?.username || "User"}! ({user?.role || ""})
+                </div>
+                <button onClick={handleLogout} className="logout-button">
+                    Logout
+                </button>
             </header>
 
             <div className="content">
@@ -269,7 +437,9 @@ function App() {
                             </button>
                         ))}
                     </div>
-                    <div className="sidebar-footer">Name</div>
+                    <div className="sidebar-footer">
+                        {user?.username || "User"}
+                    </div>
                 </aside>
 
                 <section className="chat-panel">
