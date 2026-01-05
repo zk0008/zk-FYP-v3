@@ -10,7 +10,7 @@ from pypdf import PdfReader
 from sqlalchemy.orm import Session
 
 # Import database Base for Alembic to discover models
-from database import Base, SessionLocal, get_db
+from database import Base, SessionLocal, get_db, engine
 import models  # Import models so Alembic can see them
 from auth import hash_password, decode_token, verify_password, create_access_token
 
@@ -77,13 +77,37 @@ def init_demo_data():
         # Flush to get IDs assigned
         db.flush()
 
-        # Create Groups
-        group1 = models.Group(name="Group 1")
-        group2 = models.Group(name="Group 2")
-        group3 = models.Group(name="Group 3")
-        group4 = models.Group(name="Group 4")
+        # Create Groups with string_id mapping
+        group1 = models.Group(name="Group 1", string_id="group-a")
+        group2 = models.Group(name="Group 2", string_id="group-b")
+        group3 = models.Group(name="Group 3", string_id="group-c")
+        group4 = models.Group(name="Group 4", string_id="group-d")
         db.add_all([group1, group2, group3, group4])
         db.flush()
+        
+        # Seed a few initial messages (only if no messages exist)
+        if db.query(models.Message).count() == 0:
+            # Group 1 messages
+            db.add(models.Message(
+                group_id=group1.id,
+                user_id=students[0].id,
+                content="Hey everyone!",
+                is_AI=False
+            ))
+            db.add(models.Message(
+                group_id=group1.id,
+                user_id=students[1].id,
+                content="Hi Alice!",
+                is_AI=False
+            ))
+            # Group 2 message
+            db.add(models.Message(
+                group_id=group2.id,
+                user_id=students[2].id,
+                content="Who's ready for lunch?",
+                is_AI=False
+            ))
+            db.flush()
 
         # Create Group Memberships
         # Group 1: supervisor1, student1, student2
@@ -121,6 +145,10 @@ def init_demo_data():
 @app.on_event("startup")
 async def startup_event():
     """Run initialization tasks when the app starts."""
+    # Create all database tables
+    Base.metadata.create_all(bind=engine)
+    # Ensure uploads directory exists
+    PDF_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     init_demo_data()
 
 # Initialize OpenAI client with API key from environment variable
@@ -164,13 +192,7 @@ groups = {
     },
 }
 
-# In-memory storage for PDF metadata: {group_id: [{"id": int, "filename": str, "uploaded_at": str, "file_path": str}, ...]}
-group_documents = {
-    "group-a": [],
-    "group-b": [],
-    "group-c": [],
-    "group-d": [],
-}
+# In-memory storage removed - documents are now persisted in PostgreSQL
 
 
 class NewMessage(BaseModel):
@@ -183,18 +205,22 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def extract_text_from_pdfs(group_id: str) -> str:
+def extract_text_from_pdfs(group_id: str, db: Session) -> str:
     """
     Extract text from all PDFs uploaded for a group.
     Returns concatenated text from all PDFs, or empty string if no PDFs.
     """
-    documents = group_documents.get(group_id, [])
+    # Query documents from database for this group
+    documents = db.query(models.Document).filter(
+        models.Document.group_id == group_id
+    ).all()
+    
     if not documents:
         return ""
     
     all_text = []
     for doc in documents:
-        file_path = Path(doc["file_path"])
+        file_path = Path(doc.stored_path)
         if not file_path.exists():
             continue
         
@@ -205,82 +231,93 @@ def extract_text_from_pdfs(group_id: str) -> str:
                 pdf_text.append(page.extract_text())
             combined_text = "\n".join(pdf_text)
             if combined_text.strip():
-                all_text.append(f"--- Content from {doc['filename']} ---\n{combined_text}")
+                all_text.append(f"--- Content from {doc.filename} ---\n{combined_text}")
         except Exception as e:
             # If PDF reading fails, skip this document
-            print(f"Error reading PDF {doc['filename']}: {str(e)}")
+            print(f"Error reading PDF {doc.filename}: {str(e)}")
             continue
     
     return "\n\n".join(all_text)
 
 
-def generate_ai_reply(group_id: str, question: str, next_message_id: int):
+def generate_ai_reply(group_id: str, question: str, db_group_id: int):
     """
-    Background task to generate AI reply and append it to the group's messages.
+    Background task to generate AI reply and save it to the database.
     This runs asynchronously after the POST endpoint returns.
     """
-    group = groups.get(group_id)
-    if not group:
-        return  # Group doesn't exist, skip
-    
-    if not openai_client:
-        # If OpenAI client is not initialized, add error message
-        ai_response = {
-            "id": next_message_id,
-            "sender": "AI Bot",
-            "text": "Error: OPENAI_API_KEY environment variable not set. Please configure your API key.",
-            "is_bot": True
-        }
-        group["messages"].append(ai_response)
-        return
-    
+    db = SessionLocal()
     try:
-        # Extract text from PDFs uploaded for this group
-        pdf_context = extract_text_from_pdfs(group_id)
+        # Verify group exists
+        db_group = db.query(models.Group).filter(models.Group.id == db_group_id).first()
+        if not db_group:
+            return  # Group doesn't exist, skip
         
-        # Build system message based on whether PDFs exist
-        if pdf_context:
-            system_message = (
-                "You are a helpful assistant in a group chat. "
-                "Answer questions based on the following documents provided for this group. "
-                "If the answer is not in the documents, say so clearly. "
-                "Provide concise and helpful responses based on the document content.\n\n"
-                f"Documents for this group:\n{pdf_context}"
+        if not openai_client:
+            # If OpenAI client is not initialized, save error message
+            ai_message = models.Message(
+                group_id=db_group_id,
+                user_id=None,  # AI messages have no user
+                content="Error: OPENAI_API_KEY environment variable not set. Please configure your API key.",
+                is_AI=True
             )
-        else:
-            system_message = "You are a helpful assistant in a group chat. Provide concise and helpful responses."
+            db.add(ai_message)
+            db.commit()
+            return
         
-        # Call OpenAI API
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": question}
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        
-        # Extract the AI's response text
-        ai_text = response.choices[0].message.content
-        
-        # Create AI bot response
-        ai_response = {
-            "id": next_message_id,
-            "sender": "AI Bot",
-            "text": ai_text,
-            "is_bot": True
-        }
-        group["messages"].append(ai_response)
+        try:
+            # Extract text from PDFs uploaded for this group
+            pdf_context = extract_text_from_pdfs(group_id, db)
+            
+            # Build system message based on whether PDFs exist
+            if pdf_context:
+                system_message = (
+                    "You are a helpful assistant in a group chat. "
+                    "Answer questions based on the following documents provided for this group. "
+                    "If the answer is not in the documents, say so clearly. "
+                    "Provide concise and helpful responses based on the document content.\n\n"
+                    f"Documents for this group:\n{pdf_context}"
+                )
+            else:
+                system_message = "You are a helpful assistant in a group chat. Provide concise and helpful responses."
+            
+            # Call OpenAI API
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": question}
+                ],
+                max_tokens=500,
+                temperature=0.7
+            )
+            
+            # Extract the AI's response text
+            ai_text = response.choices[0].message.content
+            
+            # Save AI bot response to database
+            ai_message = models.Message(
+                group_id=db_group_id,
+                user_id=None,  # AI messages have no user
+                content=ai_text,
+                is_AI=True
+            )
+            db.add(ai_message)
+            db.commit()
+        except Exception as e:
+            # Handle API errors gracefully
+            ai_message = models.Message(
+                group_id=db_group_id,
+                user_id=None,
+                content=f"Error: Failed to get AI response. {str(e)}",
+                is_AI=True
+            )
+            db.add(ai_message)
+            db.commit()
     except Exception as e:
-        # Handle API errors gracefully
-        ai_response = {
-            "id": next_message_id,
-            "sender": "AI Bot",
-            "text": f"Error: Failed to get AI response. {str(e)}",
-            "is_bot": True
-        }
-        group["messages"].append(ai_response)
+        db.rollback()
+        print(f"Error saving AI reply: {str(e)}")
+    finally:
+        db.close()
 
 
 # Authentication dependency
@@ -363,59 +400,33 @@ def get_my_groups(
 ):
     """
     Get groups the current user is allowed to see.
-    Returns in-memory groups (with string IDs like "group-a") that match database groups.
+    Returns groups with string IDs like "group-a" from database.
     - Coordinator: sees all groups
     - Supervisor: sees only groups they are a member of
-    - Student: sees only their own group
+    - Student: sees only groups they are a member of
     """
-    # Map database group IDs to in-memory group keys
-    # Database Group 1 -> "group-a", Group 2 -> "group-b", Group 3 -> "group-c", Group 4 -> "group-d"
-    db_to_mem_map = {
-        1: "group-a",
-        2: "group-b",
-        3: "group-c",
-        4: "group-d",
-    }
-    
     if current_user.role == "coordinator":
-        # Coordinator sees all in-memory groups
-        return list(groups.values())
+        # Coordinator sees all groups
+        all_groups = db.query(models.Group).all()
+        return [{"id": group.string_id, "name": group.name} for group in all_groups]
     
-    elif current_user.role == "supervisor":
-        # Supervisor sees groups they are a member of (map database groups to in-memory groups)
+    elif current_user.role == "supervisor" or current_user.role == "student":
+        # Supervisor/Student sees groups they are a member of
         group_memberships = db.query(models.GroupMember).filter(
             models.GroupMember.user_id == current_user.id
         ).all()
-        db_group_ids = {membership.group.id for membership in group_memberships}
-        
-        # Map database group IDs to in-memory groups
-        result = []
-        for db_group_id in db_group_ids:
-            mem_key = db_to_mem_map.get(db_group_id)
-            if mem_key and mem_key in groups:
-                result.append(groups[mem_key])
-        return result
-    
-    elif current_user.role == "student":
-        # Student sees only their own group
-        group_membership = db.query(models.GroupMember).filter(
-            models.GroupMember.user_id == current_user.id
-        ).first()
-        if group_membership:
-            # Map database group ID to in-memory group
-            db_group_id = group_membership.group.id
-            mem_key = db_to_mem_map.get(db_group_id)
-            if mem_key and mem_key in groups:
-                return [groups[mem_key]]
-        return []
+        user_groups = [membership.group for membership in group_memberships]
+        return [{"id": group.string_id, "name": group.name} for group in user_groups]
     
     else:
         raise HTTPException(status_code=403, detail="Unknown user role")
 
 
 @app.get("/groups")
-def list_groups():
-    return list(groups.values())
+def list_groups(db: Session = Depends(get_db)):
+    """List all groups (legacy endpoint - frontend uses /my-groups)"""
+    all_groups = db.query(models.Group).all()
+    return [{"id": group.string_id, "name": group.name} for group in all_groups]
 
 
 def check_group_access(group_id: str, current_user: models.User, db: Session) -> bool:
@@ -423,30 +434,19 @@ def check_group_access(group_id: str, current_user: models.User, db: Session) ->
     Check if the current user has access to the specified group.
     Returns True if access is allowed, False otherwise.
     """
-    # Check if group exists in in-memory groups
-    if group_id not in groups:
+    # Find group by string_id
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
         return False
     
     # Coordinator has access to all groups
     if current_user.role == "coordinator":
         return True
     
-    # Map in-memory group_id to database group ID
-    # "group-a" -> 1, "group-b" -> 2, "group-c" -> 3, "group-d" -> 4
-    mem_to_db_map = {
-        "group-a": 1,
-        "group-b": 2,
-        "group-c": 3,
-        "group-d": 4,
-    }
-    db_group_id = mem_to_db_map.get(group_id)
-    if not db_group_id:
-        return False
-    
     # Check if user is a member of this group
     membership = db.query(models.GroupMember).filter(
         models.GroupMember.user_id == current_user.id,
-        models.GroupMember.group_id == db_group_id
+        models.GroupMember.group_id == db_group.id
     ).first()
     
     return membership is not None
@@ -458,15 +458,32 @@ def list_messages(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    group = groups.get(group_id)
-    if not group:
+    # Find group by string_id
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
     
     # Check authorization
     if not check_group_access(group_id, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this group")
     
-    return group["messages"]
+    # Query messages from database
+    messages = db.query(models.Message).filter(
+        models.Message.group_id == db_group.id
+    ).order_by(models.Message.timestamp).all()
+    
+    # Convert to API format: [{id, sender, text, is_bot}]
+    result = []
+    for msg in messages:
+        sender = "AI Bot" if msg.is_AI else (msg.user.username if msg.user else "Unknown")
+        result.append({
+            "id": msg.id,
+            "sender": sender,
+            "text": msg.content,
+            "is_bot": msg.is_AI
+        })
+    
+    return result
 
 
 @app.post("/groups/{group_id}/messages")
@@ -477,18 +494,25 @@ def add_message(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    group = groups.get(group_id)
-    if not group:
+    # Find group by string_id
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
     
     # Check authorization
     if not check_group_access(group_id, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this group")
 
-    # Save the user message with is_bot = False
-    next_id = (group["messages"][-1]["id"] + 1) if group["messages"] else 1
-    new_entry = {"id": next_id, "sender": message.sender, "text": message.text, "is_bot": False}
-    group["messages"].append(new_entry)
+    # Save the user message to database
+    new_message = models.Message(
+        group_id=db_group.id,
+        user_id=current_user.id,
+        content=message.text,
+        is_AI=False
+    )
+    db.add(new_message)
+    db.commit()
+    db.refresh(new_message)
 
     # Check if message starts with "@ai" and schedule AI response in background
     if message.text.startswith("@ai"):
@@ -497,12 +521,15 @@ def add_message(
         
         if question:
             # Schedule AI reply generation as a background task
-            # The AI response will be appended to messages when ready
-            ai_id = next_id + 1
-            background_tasks.add_task(generate_ai_reply, group_id, question, ai_id)
+            background_tasks.add_task(generate_ai_reply, group_id, question, db_group.id)
 
-    # Return immediately without waiting for AI response
-    return new_entry
+    # Return in API format: {id, sender, text, is_bot}
+    return {
+        "id": new_message.id,
+        "sender": current_user.username,
+        "text": new_message.content,
+        "is_bot": False
+    }
 
 
 @app.get("/groups/{group_id}/documents")
@@ -512,17 +539,31 @@ def list_documents(
     db: Session = Depends(get_db)
 ):
     """List all PDF documents for a group"""
-    group = groups.get(group_id)
-    if not group:
+    # Check if group exists in database
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
     
     # Check authorization
     if not check_group_access(group_id, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this group")
     
-    # Return documents for this group (or empty list if none)
-    documents = group_documents.get(group_id, [])
-    return documents
+    # Query documents from database
+    documents = db.query(models.Document).filter(
+        models.Document.group_id == group_id
+    ).order_by(models.Document.created_at.desc()).all()
+    
+    # Convert to API format: [{id, filename, uploaded_at, file_path}]
+    result = []
+    for doc in documents:
+        result.append({
+            "id": doc.id,
+            "filename": doc.filename,
+            "uploaded_at": doc.created_at.isoformat(),
+            "file_path": doc.stored_path,
+        })
+    
+    return result
 
 
 @app.post("/groups/{group_id}/documents")
@@ -533,8 +574,9 @@ async def upload_document(
     db: Session = Depends(get_db)
 ):
     """Upload a PDF document for a group"""
-    group = groups.get(group_id)
-    if not group:
+    # Check if group exists in database
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
     
     # Check authorization
@@ -561,42 +603,59 @@ async def upload_document(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
     
-    # Store metadata in memory
-    if group_id not in group_documents:
-        group_documents[group_id] = []
+    # Store metadata in database
+    document = models.Document(
+        group_id=group_id,
+        uploaded_by_user_id=current_user.id,
+        filename=file.filename,
+        stored_path=str(file_path),
+        created_at=datetime.utcnow()
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
     
-    next_doc_id = max([doc.get("id", 0) for doc in group_documents[group_id]], default=0) + 1
-    document_metadata = {
-        "id": next_doc_id,
-        "filename": file.filename,
-        "uploaded_at": datetime.now().isoformat(),
-        "file_path": str(file_path),
+    # Return in API format: {id, filename, uploaded_at, file_path}
+    return {
+        "id": document.id,
+        "filename": document.filename,
+        "uploaded_at": document.created_at.isoformat(),
+        "file_path": document.stored_path,
     }
-    group_documents[group_id].append(document_metadata)
-    
-    return document_metadata
 
 
 @app.get("/groups/{group_id}/documents/{document_id}")
-def download_document(group_id: str, document_id: int):
+def download_document(
+    group_id: str,
+    document_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Download a PDF document"""
-    group = groups.get(group_id)
-    if not group:
+    # Check if group exists in database
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
     
-    # Find the document
-    documents = group_documents.get(group_id, [])
-    document = next((doc for doc in documents if doc["id"] == document_id), None)
+    # Check authorization
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+    
+    # Find the document in database
+    document = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.group_id == group_id
+    ).first()
     
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    file_path = Path(document["file_path"])
+    file_path = Path(document.stored_path)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
     
     return FileResponse(
         path=file_path,
-        filename=document["filename"],
+        filename=document.filename,
         media_type="application/pdf"
     )
