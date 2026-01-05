@@ -341,11 +341,26 @@ function App() {
             });
     };
 
-    const handleDownloadDocument = (documentId, filename) => {
-        window.open(
-            `${API_BASE}/groups/${selectedGroup.id}/documents/${documentId}`,
-            "_blank"
-        );
+    const handleDownloadDocument = async (documentId, filename) => {
+        try {
+            const response = await authFetch(
+                `${API_BASE}/groups/${selectedGroup.id}/documents/${documentId}`
+            );
+            if (!response.ok) {
+                throw new Error("Failed to download document");
+            }
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (err) {
+            setError("Failed to download document");
+        }
     };
 
     // Login component
