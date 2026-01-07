@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Text, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -30,6 +30,7 @@ class Group(Base):
     members = relationship("GroupMember", back_populates="group")
     messages = relationship("Message", back_populates="group")
     documents = relationship("Document", back_populates="group")
+    summaries = relationship("Summary", back_populates="group")
 
 
 class GroupMember(Base):
@@ -55,6 +56,7 @@ class Message(Base):
     content = Column(String, nullable=False)
     is_AI = Column(Boolean, default=False, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    sources = Column(JSON, nullable=True)  # Array of source objects: [{"type": "document", "filename": "...", "id": ...}, ...]
 
     # Relationships
     group = relationship("Group", back_populates="messages")
@@ -74,4 +76,23 @@ class Document(Base):
     # Relationships
     group = relationship("Group", back_populates="documents")
     uploaded_by = relationship("User")
+
+
+class Summary(Base):
+    __tablename__ = "summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(String, ForeignKey("groups.string_id"), nullable=False)
+    range_type = Column(String, nullable=False)  # "weekly", "full", etc.
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
+    summary_text = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    source_last_message_ts = Column(DateTime, nullable=True)
+    source_message_count = Column(Integer, nullable=True)
+
+    # Relationships
+    group = relationship("Group", back_populates="summaries")
+    created_by = relationship("User")
 

@@ -1,7 +1,7 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -265,7 +265,7 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int):
             return
         
         try:
-            # Extract text from PDFs uploaded for this group
+            # Extract text from PDFs uploaded for this group (for RAG - documents influence answers silently)
             pdf_context = extract_text_from_pdfs(group_id, db)
             
             # Build system message based on whether PDFs exist
@@ -273,8 +273,8 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int):
                 system_message = (
                     "You are a helpful assistant in a group chat. "
                     "Answer questions based on the following documents provided for this group. "
-                    "If the answer is not in the documents, say so clearly. "
-                    "Provide concise and helpful responses based on the document content.\n\n"
+                    "If the answer is not in the documents, use your general knowledge. "
+                    "Provide concise and helpful responses.\n\n"
                     f"Documents for this group:\n{pdf_context}"
                 )
             else:
@@ -450,6 +450,37 @@ def check_group_access(group_id: str, current_user: models.User, db: Session) ->
     ).first()
     
     return membership is not None
+
+
+def check_summary_access(group_id: str, current_user: models.User, db: Session) -> bool:
+    """
+    Check if the current user has access to summaries for the specified group.
+    Returns True if access is allowed, False otherwise.
+    Access rules: coordinator OR (supervisor AND member of group).
+    Students are NOT allowed.
+    """
+    # Find group by string_id
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        return False
+    
+    # Coordinator has access to all groups
+    if current_user.role == "coordinator":
+        return True
+    
+    # Students are NOT allowed
+    if current_user.role == "student":
+        return False
+    
+    # Supervisor must be a member of this group
+    if current_user.role == "supervisor":
+        membership = db.query(models.GroupMember).filter(
+            models.GroupMember.user_id == current_user.id,
+            models.GroupMember.group_id == db_group.id
+        ).first()
+        return membership is not None
+    
+    return False
 
 
 @app.get("/groups/{group_id}/messages")
@@ -659,3 +690,215 @@ def download_document(
         filename=document.filename,
         media_type="application/pdf"
     )
+
+
+@app.get("/groups/{group_id}/summary")
+def get_summary(
+    group_id: str,
+    range: str = Query("weekly", description="Summary range type (e.g., 'weekly', 'full')"),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the latest summary for a group.
+    Access: coordinator OR (supervisor AND member of group). Students are NOT allowed.
+    """
+    # Check if group exists in database
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization (coordinator or supervisor only, no students)
+    if not check_summary_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+    
+    # Query for the latest summary matching the group_id and range_type
+    summary = db.query(models.Summary).filter(
+        models.Summary.group_id == group_id,
+        models.Summary.range_type == range
+    ).order_by(models.Summary.created_at.desc()).first()
+    
+    # If no summary exists, return empty summary structure
+    if not summary:
+        return {
+            "group_id": group_id,
+            "range": range,
+            "summary_text": "",
+            "created_at": None,
+            "start_time": None,
+            "end_time": None,
+            "source_last_message_ts": None,
+            "source_message_count": None
+        }
+    
+    # Return summary data
+    return {
+        "group_id": summary.group_id,
+        "range": summary.range_type,
+        "summary_text": summary.summary_text,
+        "created_at": summary.created_at.isoformat() if summary.created_at else None,
+        "start_time": summary.start_time.isoformat() if summary.start_time else None,
+        "end_time": summary.end_time.isoformat() if summary.end_time else None,
+        "source_last_message_ts": summary.source_last_message_ts.isoformat() if summary.source_last_message_ts else None,
+        "source_message_count": summary.source_message_count
+    }
+
+
+@app.post("/groups/{group_id}/summary")
+def generate_summary(
+    group_id: str,
+    range: str = Query("weekly", description="Summary range type (e.g., 'weekly', 'full')"),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate and save a summary for a group.
+    Access: coordinator OR (supervisor AND member of group). Students are NOT allowed.
+    """
+    # Check if group exists in database
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization (coordinator or supervisor only, no students)
+    if not check_summary_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+    
+    # Handle different range types
+    if range == "weekly":
+        # Get messages from the last 7 days
+        cutoff_time = datetime.utcnow() - timedelta(days=7)
+        messages = db.query(models.Message).filter(
+            models.Message.group_id == db_group.id,
+            models.Message.timestamp >= cutoff_time
+        ).order_by(models.Message.timestamp.asc()).all()
+    else:
+        # For other range types, fetch all messages (can be extended later)
+        messages = db.query(models.Message).filter(
+            models.Message.group_id == db_group.id
+        ).order_by(models.Message.timestamp.asc()).all()
+    
+    # Check if there are any messages
+    if not messages:
+        # Return friendly message
+        return {
+            "group_id": group_id,
+            "range": range,
+            "summary_text": "No messages in the selected period.",
+            "created_at": datetime.utcnow().isoformat(),
+            "start_time": None,
+            "end_time": None,
+            "source_last_message_ts": None,
+            "source_message_count": 0
+        }
+    
+    # Get the latest message timestamp for optimization check
+    latest_message_ts = messages[-1].timestamp
+    
+    # Check if we can reuse an existing summary (optimization)
+    existing_summary = db.query(models.Summary).filter(
+        models.Summary.group_id == group_id,
+        models.Summary.range_type == range
+    ).order_by(models.Summary.created_at.desc()).first()
+    
+    if existing_summary and existing_summary.source_last_message_ts:
+        # Check if the latest message timestamp matches
+        if existing_summary.source_last_message_ts == latest_message_ts:
+            # No new messages, return existing summary
+            return {
+                "group_id": existing_summary.group_id,
+                "range": existing_summary.range_type,
+                "summary_text": existing_summary.summary_text,
+                "created_at": existing_summary.created_at.isoformat() if existing_summary.created_at else None,
+                "start_time": existing_summary.start_time.isoformat() if existing_summary.start_time else None,
+                "end_time": existing_summary.end_time.isoformat() if existing_summary.end_time else None,
+                "source_last_message_ts": existing_summary.source_last_message_ts.isoformat() if existing_summary.source_last_message_ts else None,
+                "source_message_count": existing_summary.source_message_count
+            }
+    
+    # Build transcript from messages
+    transcript_lines = []
+    for msg in messages:
+        timestamp_str = msg.timestamp.strftime("%Y-%m-%d %H:%M")
+        username = "AI Bot" if msg.is_AI else (msg.user.username if msg.user else "Unknown")
+        transcript_lines.append(f"[{timestamp_str}] {username}: {msg.content}")
+    
+    transcript = "\n".join(transcript_lines)
+    
+    # Check if OpenAI client is available
+    if not openai_client:
+        # If OpenAI is not available, save an error summary
+        summary_text = "Error: OPENAI_API_KEY environment variable not set. Please configure your API key."
+    else:
+        try:
+            # Build prompt for simple summary generation
+            system_prompt = (
+                "You are a helpful assistant that creates concise, readable summaries of group chat conversations. "
+                "Analyze the conversation transcript and provide a summary in EXACTLY this format:\n\n"
+                "First, write a short plain-language paragraph (2-3 sentences) explaining what happened in the group recently. "
+                "Then, on a new line, write 'Key points:' followed by 3-6 concise bullet points on separate lines.\n\n"
+                "CRITICAL FORMATTING RULES:\n"
+                "- DO NOT use any markdown headings (no #, ##, ###, etc.)\n"
+                "- DO NOT use markdown bold (**text**)\n"
+                "- DO NOT create sections like 'Highlights', 'Decisions', 'Open Questions', or 'Action Items'\n"
+                "- Use simple dashes (-) or asterisks (*) for bullets, NOT markdown\n"
+                "- Write in plain text only\n"
+                "- Keep the paragraph conversational and easy to read\n"
+                "- Make bullets action-oriented and skimmable\n"
+                "- Example format:\n"
+                "  The group discussed project timelines and resource allocation. Several team members shared updates on their progress.\n\n"
+                "  Key points:\n"
+                "  - Project deadline moved to next month\n"
+                "  - Need to assign additional developer\n"
+                "  - Client feedback session scheduled for Friday"
+            )
+            
+            user_prompt = f"Please create a summary of the following group chat conversation:\n\n{transcript}"
+            
+            # Call OpenAI API
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=1000,
+                temperature=0.7
+            )
+            
+            summary_text = response.choices[0].message.content
+        except Exception as e:
+            # Handle API errors gracefully
+            summary_text = f"Error: Failed to generate summary. {str(e)}"
+    
+    # Calculate time range
+    start_time = messages[0].timestamp
+    end_time = messages[-1].timestamp
+    
+    # Save summary to database
+    new_summary = models.Summary(
+        group_id=group_id,
+        range_type=range,
+        start_time=start_time,
+        end_time=end_time,
+        summary_text=summary_text,
+        created_by_user_id=current_user.id,
+        source_last_message_ts=latest_message_ts,
+        source_message_count=len(messages),
+        created_at=datetime.utcnow()
+    )
+    db.add(new_summary)
+    db.commit()
+    db.refresh(new_summary)
+    
+    # Return summary data
+    return {
+        "group_id": new_summary.group_id,
+        "range": new_summary.range_type,
+        "summary_text": new_summary.summary_text,
+        "created_at": new_summary.created_at.isoformat() if new_summary.created_at else None,
+        "start_time": new_summary.start_time.isoformat() if new_summary.start_time else None,
+        "end_time": new_summary.end_time.isoformat() if new_summary.end_time else None,
+        "source_last_message_ts": new_summary.source_last_message_ts.isoformat() if new_summary.source_last_message_ts else None,
+        "source_message_count": new_summary.source_message_count
+    }
