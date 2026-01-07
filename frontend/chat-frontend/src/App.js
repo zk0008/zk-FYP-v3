@@ -22,6 +22,9 @@ function App() {
     const [documents, setDocuments] = useState([]);
     const [loadingDocuments, setLoadingDocuments] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [summary, setSummary] = useState(null);
+    const [loadingSummary, setLoadingSummary] = useState(false);
+    const [refreshingSummary, setRefreshingSummary] = useState(false);
     const pollingIntervalRef = useRef(null);
     const pollingTimeoutRef = useRef(null);
 
@@ -177,6 +180,27 @@ function App() {
                 });
         } else {
             setDocuments([]);
+        }
+    }, [activeTab, selectedGroup, token]);
+
+    // Fetch summary when Overview tab is active and group is selected
+    useEffect(() => {
+        if (activeTab === "Overview" && selectedGroup && token) {
+            setLoadingSummary(true);
+            authFetch(
+                `${API_BASE}/groups/${selectedGroup.id}/summary?range=weekly`
+            )
+                .then((res) => res.json())
+                .then((data) => {
+                    setSummary(data);
+                    setLoadingSummary(false);
+                })
+                .catch(() => {
+                    setError("Failed to load summary");
+                    setLoadingSummary(false);
+                });
+        } else {
+            setSummary(null);
         }
     }, [activeTab, selectedGroup, token]);
 
@@ -363,6 +387,91 @@ function App() {
         }
     };
 
+    const handleRefreshSummary = async () => {
+        if (!selectedGroup || !token) {
+            return;
+        }
+
+        setRefreshingSummary(true);
+        setError("");
+
+        try {
+            const response = await authFetch(
+                `${API_BASE}/groups/${selectedGroup.id}/summary?range=weekly`,
+                {
+                    method: "POST",
+                }
+            );
+            if (!response.ok) {
+                throw new Error("Failed to refresh summary");
+            }
+            const data = await response.json();
+            setSummary(data);
+        } catch (err) {
+            setError("Failed to refresh summary");
+        } finally {
+            setRefreshingSummary(false);
+        }
+    };
+
+    // Helper function to format timestamp in Singapore timezone
+    const formatSingaporeTime = (utcTimestamp) => {
+        if (!utcTimestamp) {
+            return "—";
+        }
+
+        try {
+            // Ensure the timestamp is treated as UTC
+            // Backend sends ISO format like "2026-01-06T11:43:51" or "2026-01-06T11:43:51.123456"
+            // We need to explicitly mark it as UTC by appending 'Z' if no timezone is present
+            let timestampStr = String(utcTimestamp).trim();
+
+            // Check if it already has timezone info (Z, +, or - after the time part)
+            const hasTimezone =
+                timestampStr.endsWith("Z") ||
+                timestampStr.match(/[+-]\d{2}:\d{2}$/) ||
+                timestampStr.match(/[+-]\d{4}$/);
+
+            if (!hasTimezone) {
+                // Remove microseconds if present, then append 'Z' to indicate UTC
+                timestampStr = timestampStr.split(".")[0] + "Z";
+            }
+
+            const date = new Date(timestampStr);
+
+            // Verify the date is valid
+            if (isNaN(date.getTime())) {
+                console.error("Invalid date:", utcTimestamp);
+                return "—";
+            }
+
+            const formatter = new Intl.DateTimeFormat("en-GB", {
+                timeZone: "Asia/Singapore",
+                day: "2-digit",
+                month: "2-digit",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: false,
+            });
+
+            // Format as DD/MM/YYYY, HH:MM:SS
+            const parts = formatter.formatToParts(date);
+            const day = parts.find((p) => p.type === "day").value;
+            const month = parts.find((p) => p.type === "month").value;
+            const year = parts.find((p) => p.type === "year").value;
+            const hour = parts.find((p) => p.type === "hour").value;
+            const minute = parts.find((p) => p.type === "minute").value;
+            const second = parts.find((p) => p.type === "second").value;
+
+            return `${day}/${month}/${year}, ${hour}:${minute}:${second}`;
+        } catch (err) {
+            console.error("Error formatting time:", err, utcTimestamp);
+            return "—";
+        }
+    };
+
     // Login component
     const LoginPage = () => {
         const [username, setUsername] = useState("");
@@ -476,6 +585,17 @@ function App() {
                             >
                                 Documents
                             </span>
+                            {(user?.role === "coordinator" ||
+                                user?.role === "supervisor") && (
+                                <span
+                                    className={
+                                        activeTab === "Overview" ? "active" : ""
+                                    }
+                                    onClick={() => setActiveTab("Overview")}
+                                >
+                                    Overview
+                                </span>
+                            )}
                         </nav>
                     )}
                     {activeTab === "Chats" ? (
@@ -497,12 +617,20 @@ function App() {
                                         {messages.map((msg) => (
                                             <div
                                                 key={msg.id}
-                                                className="message-row"
+                                                className={`message-row ${
+                                                    msg.is_bot
+                                                        ? "ai-message"
+                                                        : ""
+                                                }`}
                                             >
                                                 <span className="message-sender">
                                                     {msg.sender}:
                                                 </span>
-                                                <span>{msg.text}</span>
+                                                <div className="message-content">
+                                                    <div className="message-text">
+                                                        {msg.text}
+                                                    </div>
+                                                </div>
                                             </div>
                                         ))}
                                         {!messages.length && (
@@ -532,7 +660,7 @@ function App() {
                                 </button>
                             </form>
                         </>
-                    ) : (
+                    ) : activeTab === "Documents" ? (
                         <div className="documents-panel">
                             {error && <p className="error-text">{error}</p>}
                             {!selectedGroup && !error && (
@@ -601,7 +729,69 @@ function App() {
                                 </>
                             )}
                         </div>
-                    )}
+                    ) : activeTab === "Overview" ? (
+                        <div className="overview-panel">
+                            {error && <p className="error-text">{error}</p>}
+                            {!selectedGroup && !error && (
+                                <p className="placeholder">
+                                    Select a chatroom to view overview.
+                                </p>
+                            )}
+                            {selectedGroup && (
+                                <>
+                                    <div className="overview-header">
+                                        <h3>Weekly Summary</h3>
+                                        <button
+                                            onClick={handleRefreshSummary}
+                                            disabled={refreshingSummary}
+                                            className="download-btn"
+                                            style={{
+                                                padding: "8px 16px",
+                                                fontSize: "14px",
+                                            }}
+                                        >
+                                            {refreshingSummary
+                                                ? "Refreshing..."
+                                                : "Refresh Summary"}
+                                        </button>
+                                    </div>
+                                    {loadingSummary ? (
+                                        <p className="placeholder">
+                                            Loading summary…
+                                        </p>
+                                    ) : summary ? (
+                                        <div className="overview-content">
+                                            <p
+                                                style={{
+                                                    color: "#666",
+                                                    fontSize: "14px",
+                                                    marginBottom: "16px",
+                                                }}
+                                            >
+                                                Last updated:{" "}
+                                                {formatSingaporeTime(
+                                                    summary.created_at
+                                                )}
+                                            </p>
+                                            <div
+                                                style={{
+                                                    whiteSpace: "pre-wrap",
+                                                    lineHeight: "1.6",
+                                                }}
+                                            >
+                                                {summary.summary_text ||
+                                                    "No summary available."}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <p className="placeholder">
+                                            No summary available.
+                                        </p>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    ) : null}
                 </section>
             </div>
         </div>

@@ -193,10 +193,86 @@
     display: flex;
     gap: 8px;
     font-size: 14px;
+    align-items: flex-start;
+}
+
+.message-row.ai-message {
+    flex-direction: column;
+    gap: 4px;
 }
 
 .message-sender {
     font-weight: 600;
+    flex-shrink: 0;
+}
+
+.message-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.message-text {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.5;
+}
+
+.message-row.ai-message .message-text {
+    color: #333;
+    padding: 8px 0;
+}
+
+.message-sources {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #eee;
+    font-size: 12px;
+}
+
+.sources-toggle {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    padding: 4px 0;
+    font-size: 12px;
+    text-align: left;
+    transition: color 0.2s;
+}
+
+.sources-toggle:hover {
+    color: #1f1f1f;
+}
+
+.sources-list {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.source-item {
+    padding-left: 16px;
+}
+
+.source-link {
+    background: none;
+    border: none;
+    color: #0066cc;
+    cursor: pointer;
+    text-decoration: none;
+    font-size: 12px;
+    padding: 2px 0;
+    text-align: left;
+    transition: color 0.2s;
+}
+
+.source-link:hover {
+    color: #0052a3;
+    text-decoration: underline;
 }
 
 .error-text {
@@ -275,6 +351,32 @@
 
 .download-btn:hover {
     background: #f0f0f0;
+}
+
+/* Overview Panel Styles */
+.overview-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+}
+
+.overview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.overview-header h3 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.overview-content {
+    flex: 1;
 }
 
 /* Login Page Styles */
