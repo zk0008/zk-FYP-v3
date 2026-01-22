@@ -840,7 +840,8 @@ def generate_summary(
                 "You are a helpful assistant that creates concise, readable summaries of group chat conversations. "
                 "Analyze the conversation transcript and provide a summary in EXACTLY this format:\n\n"
                 "First, write a short plain-language paragraph (2-3 sentences) explaining what happened in the group recently. "
-                "Then, on a new line, write 'Key points:' followed by 3-6 concise bullet points on separate lines.\n\n"
+                "Then, on a new line, write 'Key points:' followed by 3-6 concise bullet points on separate lines. "
+                "Finally, on a new line, write 'Supervisor Action Plan:' followed by 2-3 actionable recommendations for supervisors based on the conversation.\n\n"
                 "CRITICAL FORMATTING RULES:\n"
                 "- DO NOT use any markdown headings (no #, ##, ###, etc.)\n"
                 "- DO NOT use markdown bold (**text**)\n"
@@ -849,12 +850,17 @@ def generate_summary(
                 "- Write in plain text only\n"
                 "- Keep the paragraph conversational and easy to read\n"
                 "- Make bullets action-oriented and skimmable\n"
+                "- Supervisor Action Plan bullets should be concrete, specific, and actionable\n"
                 "- Example format:\n"
                 "  The group discussed project timelines and resource allocation. Several team members shared updates on their progress.\n\n"
                 "  Key points:\n"
                 "  - Project deadline moved to next month\n"
                 "  - Need to assign additional developer\n"
-                "  - Client feedback session scheduled for Friday"
+                "  - Client feedback session scheduled for Friday\n\n"
+                "  Supervisor Action Plan:\n"
+                "  - Schedule a meeting with the team to discuss resource allocation and clarify roles\n"
+                "  - Review the project timeline and provide guidance on priority tasks\n"
+                "  - Follow up with the client to confirm feedback session details"
             )
             
             user_prompt = f"Please create a summary of the following group chat conversation:\n\n{transcript}"
@@ -866,7 +872,7 @@ def generate_summary(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1000,
+                max_tokens=1200,
                 temperature=0.7
             )
             
