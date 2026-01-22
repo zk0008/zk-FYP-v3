@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import "./App.css";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -441,6 +441,50 @@ function App() {
         }
     };
 
+    // Helper function to format summary text with bold "Key points:" and "Supervisor Action Plan:" and bullet points
+    const formatSummaryText = (text) => {
+        if (!text) return "";
+        
+        // Replace dashes with bullet points
+        let formatted = text.replace(/^(\s*)-\s+/gm, "$1• ");
+        
+        // Split by lines to handle bold headings
+        const lines = formatted.split("\n");
+        return lines.map((line, index) => {
+            // Make "Key points:" bold
+            if (line.includes("Key points:")) {
+                const parts = line.split("Key points:");
+                return (
+                    <React.Fragment key={index}>
+                        {parts[0]}
+                        <strong>Key points:</strong>
+                        {parts[1] || ""}
+                        {index < lines.length - 1 && "\n"}
+                    </React.Fragment>
+                );
+            }
+            // Make "Supervisor Action Plan:" bold
+            if (line.includes("Supervisor Action Plan:")) {
+                const parts = line.split("Supervisor Action Plan:");
+                return (
+                    <React.Fragment key={index}>
+                        {parts[0]}
+                        <strong>Supervisor Action Plan:</strong>
+                        {parts[1] || ""}
+                        {index < lines.length - 1 && "\n"}
+                    </React.Fragment>
+                );
+            }
+            // Regular line
+            return (
+                <React.Fragment key={index}>
+                    {line}
+                    {index < lines.length - 1 && "\n"}
+                </React.Fragment>
+            );
+        });
+    };
+
     // Helper function to format timestamp in Singapore timezone
     const formatSingaporeTime = (utcTimestamp) => {
         if (!utcTimestamp) {
@@ -796,26 +840,20 @@ function App() {
                                         </p>
                                     ) : summary ? (
                                         <div className="overview-content">
-                                            <p
-                                                style={{
-                                                    color: "#666",
-                                                    fontSize: "14px",
-                                                    marginBottom: "16px",
-                                                }}
-                                            >
-                                                Last updated:{" "}
-                                                {formatSingaporeTime(
-                                                    summary.created_at
-                                                )}
-                                            </p>
-                                            <div
-                                                style={{
-                                                    whiteSpace: "pre-wrap",
-                                                    lineHeight: "1.6",
-                                                }}
-                                            >
-                                                {summary.summary_text ||
-                                                    "No summary available."}
+                                            <div className="summary-card">
+                                                <p className="summary-meta">
+                                                    Last updated:{" "}
+                                                    {formatSingaporeTime(
+                                                        summary.created_at
+                                                    )}
+                                                </p>
+                                                <div className="summary-text">
+                                                    {summary.summary_text
+                                                        ? formatSummaryText(
+                                                              summary.summary_text
+                                                          )
+                                                        : "No summary available."}
+                                                </div>
                                             </div>
                                         </div>
                                     ) : (
@@ -838,6 +876,71 @@ function App() {
                                 <>
                                     <div className="overview-header">
                                         <h3>Student Overview</h3>
+                                        <button
+                                            onClick={async () => {
+                                                if (
+                                                    !selectedGroup ||
+                                                    !token
+                                                ) {
+                                                    return;
+                                                }
+
+                                                setSavingStudentSummary(true);
+                                                setError("");
+
+                                                try {
+                                                    const response =
+                                                        await authFetch(
+                                                            `${API_BASE}/groups/${selectedGroup.id}/student-summary`,
+                                                            {
+                                                                method: "POST",
+                                                                headers: {
+                                                                    "Content-Type":
+                                                                        "application/json",
+                                                                },
+                                                                body: JSON.stringify(
+                                                                    {
+                                                                        summary_text:
+                                                                            studentSummaryText,
+                                                                    }
+                                                                ),
+                                                            }
+                                                        );
+                                                    if (!response.ok) {
+                                                        throw new Error(
+                                                            "Failed to save student summary"
+                                                        );
+                                                    }
+                                                    const data =
+                                                        await response.json();
+                                                    setStudentSummary(
+                                                        data.summary_text || ""
+                                                    );
+                                                } catch (err) {
+                                                    setError(
+                                                        "Failed to save student summary"
+                                                    );
+                                                } finally {
+                                                    setSavingStudentSummary(
+                                                        false
+                                                    );
+                                                }
+                                            }}
+                                            disabled={
+                                                savingStudentSummary ||
+                                                studentSummaryText ===
+                                                    studentSummary
+                                            }
+                                            className="download-btn"
+                                            style={{
+                                                padding: "8px 16px",
+                                                fontSize: "14px",
+                                            }}
+                                        >
+                                            {savingStudentSummary
+                                                ? "Saving..."
+                                                : "Save Summary"}
+                                        </button>
                                     </div>
                                     {loadingStudentSummary ? (
                                         <p className="placeholder">
@@ -845,82 +948,17 @@ function App() {
                                         </p>
                                     ) : (
                                         <div className="overview-content">
-                                            <textarea
-                                                value={studentSummaryText}
-                                                onChange={(e) =>
-                                                    setStudentSummaryText(
-                                                        e.target.value
-                                                    )
-                                                }
-                                                placeholder="Write a collaborative summary for your group..."
-                                                className="student-summary-textarea"
-                                            />
-                                            <div className="student-summary-actions">
-                                                <button
-                                                    onClick={async () => {
-                                                        if (
-                                                            !selectedGroup ||
-                                                            !token
-                                                        ) {
-                                                            return;
-                                                        }
-
-                                                        setSavingStudentSummary(
-                                                            true
-                                                        );
-                                                        setError("");
-
-                                                        try {
-                                                            const response =
-                                                                await authFetch(
-                                                                    `${API_BASE}/groups/${selectedGroup.id}/student-summary`,
-                                                                    {
-                                                                        method:
-                                                                            "POST",
-                                                                        headers: {
-                                                                            "Content-Type":
-                                                                                "application/json",
-                                                                        },
-                                                                        body: JSON.stringify(
-                                                                            {
-                                                                                summary_text:
-                                                                                    studentSummaryText,
-                                                                            }
-                                                                        ),
-                                                                    }
-                                                                );
-                                                            if (!response.ok) {
-                                                                throw new Error(
-                                                                    "Failed to save student summary"
-                                                                );
-                                                            }
-                                                            const data =
-                                                                await response.json();
-                                                            setStudentSummary(
-                                                                data.summary_text ||
-                                                                    ""
-                                                            );
-                                                        } catch (err) {
-                                                            setError(
-                                                                "Failed to save student summary"
-                                                            );
-                                                        } finally {
-                                                            setSavingStudentSummary(
-                                                                false
-                                                            );
-                                                        }
-                                                    }}
-                                                    disabled={
-                                                        savingStudentSummary ||
-                                                        studentSummaryText ===
-                                                            studentSummary
+                                            <div className="summary-card">
+                                                <textarea
+                                                    value={studentSummaryText}
+                                                    onChange={(e) =>
+                                                        setStudentSummaryText(
+                                                            e.target.value
+                                                        )
                                                     }
-                                                    className="download-btn student-summary-save-btn"
-                                                >
-                                                    {savingStudentSummary
-                                                        ? "Saving..."
-                                                        : "Save Summary"}
-                                                </button>
+                                                    placeholder="Write a collaborative summary for your group..."
+                                                    className="student-summary-textarea"
+                                                />
                                             </div>
                                         </div>
                                     )}
