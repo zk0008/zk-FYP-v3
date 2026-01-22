@@ -245,10 +245,11 @@ def extract_text_from_pdfs(group_id: str, db: Session) -> str:
     return "\n\n".join(all_text)
 
 
-def generate_ai_reply(group_id: str, question: str, db_group_id: int):
+def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: str = None):
     """
     Background task to generate AI reply and save it to the database.
     This runs asynchronously after the POST endpoint returns.
+    username: The username of the user who asked the question (for mention in response)
     """
     db = SessionLocal()
     try:
@@ -259,10 +260,14 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int):
         
         if not openai_client:
             # If OpenAI client is not initialized, save error message
+            error_message = "Error: OPENAI_API_KEY environment variable not set. Please configure your API key."
+            if username:
+                error_message = f"@{username}: {error_message}"
+            
             ai_message = models.Message(
                 group_id=db_group_id,
                 user_id=None,  # AI messages have no user
-                content="Error: OPENAI_API_KEY environment variable not set. Please configure your API key.",
+                content=error_message,
                 is_AI=True
             )
             db.add(ai_message)
@@ -299,6 +304,10 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int):
             # Extract the AI's response text
             ai_text = response.choices[0].message.content
             
+            # Prepend username mention if available
+            if username:
+                ai_text = f"@{username}: {ai_text}"
+            
             # Save AI bot response to database
             ai_message = models.Message(
                 group_id=db_group_id,
@@ -310,10 +319,14 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int):
             db.commit()
         except Exception as e:
             # Handle API errors gracefully
+            error_message = f"Error: Failed to get AI response. {str(e)}"
+            if username:
+                error_message = f"@{username}: {error_message}"
+            
             ai_message = models.Message(
                 group_id=db_group_id,
                 user_id=None,
-                content=f"Error: Failed to get AI response. {str(e)}",
+                content=error_message,
                 is_AI=True
             )
             db.add(ai_message)
@@ -558,7 +571,8 @@ def add_message(
         
         if question:
             # Schedule AI reply generation as a background task
-            background_tasks.add_task(generate_ai_reply, group_id, question, db_group.id)
+            # Pass the username so the AI can mention them in the response
+            background_tasks.add_task(generate_ai_reply, group_id, question, db_group.id, current_user.username)
 
     # Return in API format: {id, sender, text, is_bot}
     return {
@@ -590,14 +604,32 @@ def list_documents(
         models.Document.group_id == group_id
     ).order_by(models.Document.created_at.desc()).all()
     
-    # Convert to API format: [{id, filename, uploaded_at, file_path}]
+    # Convert to API format: [{id, filename, uploaded_at, file_path, uploaded_by, file_size}]
+    import os
     result = []
     for doc in documents:
+        # Get file size
+        file_size = 0
+        if os.path.exists(doc.stored_path):
+            file_size = os.path.getsize(doc.stored_path)
+        
+        # Get uploader username
+        uploader_name = "Unknown"
+        if doc.uploaded_by:
+            uploader_name = doc.uploaded_by.username
+        
+        # Ensure UTC timestamp is marked with 'Z' suffix
+        uploaded_at_iso = doc.created_at.isoformat()
+        if not uploaded_at_iso.endswith('Z'):
+            uploaded_at_iso = uploaded_at_iso + 'Z'
+        
         result.append({
             "id": doc.id,
             "filename": doc.filename,
-            "uploaded_at": doc.created_at.isoformat(),
+            "uploaded_at": uploaded_at_iso,
             "file_path": doc.stored_path,
+            "uploaded_by": uploader_name,
+            "file_size": file_size,
         })
     
     return result
@@ -621,8 +653,10 @@ async def upload_document(
         raise HTTPException(status_code=403, detail="Access denied to this group")
     
     # Validate file type
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    allowed_extensions = ['.pdf', '.doc', '.docx']
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(status_code=400, detail="Only PDF, DOC, and DOCX files are allowed")
     
     # Generate unique filename to avoid conflicts
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -652,12 +686,22 @@ async def upload_document(
     db.commit()
     db.refresh(document)
     
-    # Return in API format: {id, filename, uploaded_at, file_path}
+    # Get file size
+    file_size = os.path.getsize(file_path)
+    
+    # Return in API format: {id, filename, uploaded_at, file_path, uploaded_by, file_size}
+    # Ensure UTC timestamp is marked with 'Z' suffix
+    uploaded_at_iso = document.created_at.isoformat()
+    if not uploaded_at_iso.endswith('Z'):
+        uploaded_at_iso = uploaded_at_iso + 'Z'
+    
     return {
         "id": document.id,
         "filename": document.filename,
-        "uploaded_at": document.created_at.isoformat(),
+        "uploaded_at": uploaded_at_iso,
         "file_path": document.stored_path,
+        "uploaded_by": current_user.username,
+        "file_size": file_size,
     }
 
 
@@ -696,6 +740,48 @@ def download_document(
         filename=document.filename,
         media_type="application/pdf"
     )
+
+
+@app.delete("/groups/{group_id}/documents/{document_id}")
+def delete_document(
+    group_id: str,
+    document_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a document from the database and file system"""
+    # Check if group exists in database
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+    
+    # Find the document in database
+    document = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.group_id == group_id
+    ).first()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Delete the file from file system
+    file_path = Path(document.stored_path)
+    if file_path.exists():
+        try:
+            file_path.unlink()
+        except Exception as e:
+            # Log error but continue with database deletion
+            print(f"Error deleting file {file_path}: {str(e)}")
+    
+    # Delete the document from database
+    db.delete(document)
+    db.commit()
+    
+    return {"message": "Document deleted successfully"}
 
 
 @app.get("/groups/{group_id}/summary")

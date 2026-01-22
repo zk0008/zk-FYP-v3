@@ -22,6 +22,8 @@ function App() {
     const [documents, setDocuments] = useState([]);
     const [loadingDocuments, setLoadingDocuments] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [selectedFile, setSelectedFile] = useState(null);
+    const fileInputRef = useRef(null);
     const [summary, setSummary] = useState(null);
     const [loadingSummary, setLoadingSummary] = useState(false);
     const [refreshingSummary, setRefreshingSummary] = useState(false);
@@ -396,14 +398,53 @@ function App() {
         }
     };
 
-    const handleFileUpload = (event) => {
-        const file = event.target.files[0];
+    const handleFileSelect = (file) => {
         if (!file || !selectedGroup) {
             return;
         }
 
-        if (!file.name.endsWith(".pdf")) {
-            setError("Only PDF files are allowed");
+        const allowedExtensions = [".pdf", ".doc", ".docx"];
+        const fileExt = file.name.toLowerCase().substring(file.name.lastIndexOf("."));
+        if (!allowedExtensions.includes(fileExt)) {
+            setError("Only PDF, DOC, and DOCX files are allowed");
+            setSelectedFile(null);
+            return;
+        }
+
+        if (file.size > 10 * 1024 * 1024) {
+            setError("File size must be less than 10MB");
+            setSelectedFile(null);
+            return;
+        }
+
+        setSelectedFile(file);
+        setError("");
+    };
+
+    const handleFileInputChange = (event) => {
+        const file = event.target.files[0];
+        handleFileSelect(file);
+    };
+
+    const handleDragOver = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+    };
+
+    const handleDragLeave = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+    };
+
+    const handleDrop = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const file = event.dataTransfer.files[0];
+        handleFileSelect(file);
+    };
+
+    const handleUpload = () => {
+        if (!selectedFile || !selectedGroup) {
             return;
         }
 
@@ -411,7 +452,7 @@ function App() {
         setError("");
 
         const formData = new FormData();
-        formData.append("file", file);
+        formData.append("file", selectedFile);
 
         authFetch(`${API_BASE}/groups/${selectedGroup.id}/documents`, {
             method: "POST",
@@ -421,13 +462,80 @@ function App() {
             .then((newDocument) => {
                 setDocuments((prev) => [...prev, newDocument]);
                 setUploading(false);
-                // Reset file input
-                event.target.value = "";
+                setSelectedFile(null);
+                if (fileInputRef.current) {
+                    fileInputRef.current.value = "";
+                }
             })
             .catch(() => {
                 setError("Failed to upload document");
                 setUploading(false);
             });
+    };
+
+    // Helper function to format file size
+    const formatFileSize = (bytes) => {
+        if (bytes === 0) return "0 Bytes";
+        const k = 1024;
+        const sizes = ["Bytes", "KB", "MB", "GB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+    };
+
+    // Helper function to format relative time
+    const formatRelativeTime = (dateString) => {
+        if (!dateString) return "Unknown";
+        
+        // Ensure the timestamp is treated as UTC
+        let timestampStr = String(dateString).trim();
+        
+        // Check if it already has timezone info (Z, +, or - after the time part)
+        const hasTimezone =
+            timestampStr.endsWith("Z") ||
+            timestampStr.match(/[+-]\d{2}:\d{2}$/) ||
+            timestampStr.match(/[+-]\d{4}$/);
+        
+        if (!hasTimezone) {
+            // Remove microseconds if present, then append 'Z' to indicate UTC
+            timestampStr = timestampStr.split(".")[0] + "Z";
+        }
+        
+        const date = new Date(timestampStr);
+        const now = new Date();
+        
+        // Verify the date is valid
+        if (isNaN(date.getTime())) {
+            console.error("Invalid date:", dateString);
+            return "Unknown";
+        }
+        
+        const diffInSeconds = Math.floor((now - date) / 1000);
+        
+        if (diffInSeconds < 0) return "just now"; // Handle future dates
+        if (diffInSeconds < 60) return "just now";
+        if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} minutes ago`;
+        if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} hours ago`;
+        if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)} days ago`;
+        if (diffInSeconds < 2592000) return `${Math.floor(diffInSeconds / 604800)} weeks ago`;
+        return `${Math.floor(diffInSeconds / 2592000)} months ago`;
+    };
+
+    const handleViewDocument = async (documentId) => {
+        try {
+            const response = await authFetch(
+                `${API_BASE}/groups/${selectedGroup.id}/documents/${documentId}`
+            );
+            if (!response.ok) {
+                throw new Error("Failed to view document");
+            }
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            window.open(url, "_blank");
+            // Clean up the URL after a delay
+            setTimeout(() => window.URL.revokeObjectURL(url), 100);
+        } catch (err) {
+            setError("Failed to view document");
+        }
     };
 
     const handleDownloadDocument = async (documentId, filename) => {
@@ -449,6 +557,35 @@ function App() {
             document.body.removeChild(a);
         } catch (err) {
             setError("Failed to download document");
+        }
+    };
+
+    const handleDeleteDocument = async (documentId) => {
+        // Show confirmation dialog
+        const confirmed = window.confirm(
+            "Are you sure you want to delete this document?"
+        );
+        
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            const response = await authFetch(
+                `${API_BASE}/groups/${selectedGroup.id}/documents/${documentId}`,
+                {
+                    method: "DELETE",
+                }
+            );
+            
+            if (!response.ok) {
+                throw new Error("Failed to delete document");
+            }
+            
+            // Remove document from local state
+            setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
+        } catch (err) {
+            setError("Failed to delete document");
         }
     };
 
@@ -682,9 +819,6 @@ function App() {
                             </button>
                         ))}
                     </div>
-                    <div className="sidebar-footer">
-                        {user?.username || "User"}
-                    </div>
                 </aside>
 
                 <section className="chat-panel">
@@ -801,60 +935,134 @@ function App() {
                             )}
                             {selectedGroup && (
                                 <>
-                                    <div className="documents-upload">
-                                        <h3>Upload PDF</h3>
-                                        <input
-                                            type="file"
-                                            accept=".pdf"
-                                            onChange={handleFileUpload}
-                                            disabled={uploading}
-                                            style={{ marginTop: "12px" }}
-                                        />
-                                        {uploading && (
-                                            <p className="placeholder">
-                                                Uploading...
+                                    <div className="documents-upload-section">
+                                        <div className="documents-upload-header">
+                                            <h3>Upload Document</h3>
+                                        </div>
+                                        <div
+                                            className="upload-drop-zone"
+                                            onDragOver={handleDragOver}
+                                            onDragLeave={handleDragLeave}
+                                            onDrop={handleDrop}
+                                            onClick={() => fileInputRef.current?.click()}
+                                        >
+                                            <div className="upload-icon">📎</div>
+                                            <p className="upload-text">
+                                                Drag & drop your file here or click to browse
                                             </p>
-                                        )}
+                                            <p className="upload-limits">
+                                                PDF, DOC, DOCX
+                                            </p>
+                                            {selectedFile && (
+                                                <p className="selected-file">
+                                                    Selected: {selectedFile.name}
+                                                </p>
+                                            )}
+                                            <input
+                                                ref={fileInputRef}
+                                                type="file"
+                                                accept=".pdf,.doc,.docx"
+                                                onChange={handleFileInputChange}
+                                                style={{ display: "none" }}
+                                            />
+                                        </div>
+                                        <div className="upload-actions">
+                                            <button
+                                                className="choose-file-btn"
+                                                onClick={() => fileInputRef.current?.click()}
+                                                disabled={uploading}
+                                            >
+                                                Choose File
+                                            </button>
+                                            <button
+                                                className="upload-btn"
+                                                onClick={handleUpload}
+                                                disabled={!selectedFile || uploading}
+                                            >
+                                                {uploading ? "Uploading..." : "Upload"}
+                                            </button>
+                                        </div>
                                     </div>
-                                    <div className="documents-list">
-                                        <h3>Documents</h3>
+                                    <div className="documents-list-section">
+                                        <div className="documents-list-header">
+                                            <h3>Your Documents</h3>
+                                            <span className="document-count">
+                                                {documents.length} document{documents.length !== 1 ? "s" : ""}
+                                            </span>
+                                        </div>
                                         {loadingDocuments ? (
                                             <p className="placeholder">
                                                 Loading documents…
                                             </p>
                                         ) : documents.length === 0 ? (
-                                            <p className="placeholder">
-                                                No documents uploaded yet.
-                                            </p>
+                                            <div className="documents-empty-state">
+                                                <div className="empty-state-icon">📭</div>
+                                                <h4 className="empty-state-heading">
+                                                    No documents yet
+                                                </h4>
+                                                <p className="empty-state-text">
+                                                    Upload your first document to get started
+                                                </p>
+                                            </div>
                                         ) : (
-                                            <ul className="document-list">
+                                            <div className="document-list">
                                                 {documents.map((doc) => (
-                                                    <li
+                                                    <div
                                                         key={doc.id}
-                                                        className="document-item"
+                                                        className="document-card"
                                                     >
-                                                        <span>
-                                                            {doc.filename}
-                                                        </span>
-                                                        <span className="document-date">
-                                                            {new Date(
-                                                                doc.uploaded_at
-                                                            ).toLocaleDateString()}
-                                                        </span>
-                                                        <button
-                                                            onClick={() =>
-                                                                handleDownloadDocument(
-                                                                    doc.id,
-                                                                    doc.filename
-                                                                )
-                                                            }
-                                                            className="download-btn"
-                                                        >
-                                                            Download
-                                                        </button>
-                                                    </li>
+                                                        <div className="document-icon">📄</div>
+                                                        <div className="document-info">
+                                                            <div className="document-name">
+                                                                {doc.filename}
+                                                            </div>
+                                                            <div className="document-metadata">
+                                                                <span className="metadata-item">
+                                                                    <span className="metadata-icon">👤</span>
+                                                                    {doc.uploaded_by || "Unknown"}
+                                                                </span>
+                                                                <span className="metadata-item">
+                                                                    <span className="metadata-icon">📦</span>
+                                                                    {formatFileSize(doc.file_size || 0)}
+                                                                </span>
+                                                                <span className="metadata-item">
+                                                                    <span className="metadata-icon">📅</span>
+                                                                    {formatRelativeTime(doc.uploaded_at)}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="document-actions">
+                                                            <button
+                                                                className="view-btn"
+                                                                onClick={() =>
+                                                                    handleViewDocument(doc.id)
+                                                                }
+                                                            >
+                                                                View
+                                                            </button>
+                                                            <button
+                                                                className="download-btn-primary"
+                                                                onClick={() =>
+                                                                    handleDownloadDocument(
+                                                                        doc.id,
+                                                                        doc.filename
+                                                                    )
+                                                                }
+                                                            >
+                                                                Download
+                                                            </button>
+                                                            <button
+                                                                className="delete-btn"
+                                                                onClick={() =>
+                                                                    handleDeleteDocument(doc.id)
+                                                                }
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        </div>
+                                                    </div>
                                                 ))}
-                                            </ul>
+                                            </div>
                                         )}
                                     </div>
                                 </>
