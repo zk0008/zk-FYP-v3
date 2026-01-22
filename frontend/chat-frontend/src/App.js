@@ -31,6 +31,8 @@ function App() {
     const [studentSummaryText, setStudentSummaryText] = useState("");
     const pollingIntervalRef = useRef(null);
     const pollingTimeoutRef = useRef(null);
+    const messagesEndRef = useRef(null);
+    const messagesContainerRef = useRef(null);
 
     // Helper function for authenticated API calls
     const authFetch = (url, options = {}) => {
@@ -156,6 +158,13 @@ function App() {
         }
     }, [isAuthenticated, token]);
 
+    // Function to scroll to bottom of messages (instant, no animation)
+    const scrollToBottom = () => {
+        if (messagesContainerRef.current) {
+            messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+        }
+    };
+
     useEffect(() => {
         if (!selectedGroup || !token) {
             setMessages([]);
@@ -167,12 +176,21 @@ function App() {
             .then((data) => {
                 setMessages(data);
                 setLoadingMessages(false);
+                // Scroll to bottom immediately after messages are loaded
+                setTimeout(scrollToBottom, 0);
             })
             .catch(() => {
                 setError("Failed to load messages");
                 setLoadingMessages(false);
             });
     }, [selectedGroup, token]);
+
+    // Scroll to bottom when messages change
+    useEffect(() => {
+        if (!loadingMessages && messages.length > 0) {
+            setTimeout(scrollToBottom, 0);
+        }
+    }, [messages, loadingMessages]);
 
     // Cleanup polling intervals on unmount or when group changes
     useEffect(() => {
@@ -708,7 +726,7 @@ function App() {
                     )}
                     {activeTab === "Chats" ? (
                         <>
-                            <div className="messages">
+                            <div className="messages" ref={messagesContainerRef}>
                                 {error && <p className="error-text">{error}</p>}
                                 {!selectedGroup && !error && (
                                     <p className="placeholder">
@@ -751,6 +769,7 @@ function App() {
                                                 say hi!
                                             </p>
                                         )}
+                                        <div ref={messagesEndRef} />
                                     </div>
                                 )}
                             </div>
