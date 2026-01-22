@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query
@@ -404,15 +405,22 @@ def get_my_groups(
 ):
     """
     Get groups the current user is allowed to see.
-    Returns groups with string IDs like "group-a" from database.
+    Returns groups with string IDs like "group-a" from database, sorted by group number.
     - Coordinator: sees all groups
     - Supervisor: sees only groups they are a member of
     - Student: sees only groups they are a member of
     """
+    def extract_group_number(group_name):
+        """Extract numeric part from group name (e.g., 'Group 1' -> 1)"""
+        match = re.search(r'\d+', group_name)
+        return int(match.group()) if match else 999
+    
     if current_user.role == "coordinator":
         # Coordinator sees all groups
         all_groups = db.query(models.Group).all()
-        return [{"id": group.string_id, "name": group.name} for group in all_groups]
+        # Sort by group number extracted from name
+        sorted_groups = sorted(all_groups, key=lambda g: extract_group_number(g.name))
+        return [{"id": group.string_id, "name": group.name} for group in sorted_groups]
     
     elif current_user.role == "supervisor" or current_user.role == "student":
         # Supervisor/Student sees groups they are a member of
@@ -420,7 +428,9 @@ def get_my_groups(
             models.GroupMember.user_id == current_user.id
         ).all()
         user_groups = [membership.group for membership in group_memberships]
-        return [{"id": group.string_id, "name": group.name} for group in user_groups]
+        # Sort by group number extracted from name
+        sorted_groups = sorted(user_groups, key=lambda g: extract_group_number(g.name))
+        return [{"id": group.string_id, "name": group.name} for group in sorted_groups]
     
     else:
         raise HTTPException(status_code=403, detail="Unknown user role")
@@ -460,8 +470,7 @@ def check_summary_access(group_id: str, current_user: models.User, db: Session) 
     """
     Check if the current user has access to summaries for the specified group.
     Returns True if access is allowed, False otherwise.
-    Access rules: coordinator OR (supervisor AND member of group).
-    Students are NOT allowed.
+    Access rules: coordinator OR (member of group - includes supervisors and students).
     """
     # Find group by string_id
     db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
@@ -472,19 +481,12 @@ def check_summary_access(group_id: str, current_user: models.User, db: Session) 
     if current_user.role == "coordinator":
         return True
     
-    # Students are NOT allowed
-    if current_user.role == "student":
-        return False
-    
-    # Supervisor must be a member of this group
-    if current_user.role == "supervisor":
-        membership = db.query(models.GroupMember).filter(
-            models.GroupMember.user_id == current_user.id,
-            models.GroupMember.group_id == db_group.id
-        ).first()
-        return membership is not None
-    
-    return False
+    # All group members (supervisors and students) have access
+    membership = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == current_user.id,
+        models.GroupMember.group_id == db_group.id
+    ).first()
+    return membership is not None
 
 
 @app.get("/groups/{group_id}/messages")
@@ -705,7 +707,7 @@ def get_summary(
 ):
     """
     Get the latest summary for a group.
-    Access: coordinator OR (supervisor AND member of group). Students are NOT allowed.
+    Access: coordinator OR (member of group - includes supervisors and students).
     """
     # Check if group exists in database
     db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
@@ -757,14 +759,14 @@ def generate_summary(
 ):
     """
     Generate and save a summary for a group.
-    Access: coordinator OR (supervisor AND member of group). Students are NOT allowed.
+    Access: coordinator OR (member of group - includes supervisors and students).
     """
     # Check if group exists in database
     db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
     if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
     
-    # Check authorization (coordinator or supervisor only, no students)
+    # Check authorization (coordinator or group member)
     if not check_summary_access(group_id, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this group")
     
