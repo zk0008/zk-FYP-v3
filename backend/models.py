@@ -24,6 +24,7 @@ class Group(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False, index=True)
     string_id = Column(String, unique=True, nullable=False, index=True)  # "group-a", "group-b", etc.
+    student_summary = Column(Text, nullable=True)  # Collaborative student summary
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships

@@ -205,6 +205,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class StudentSummaryRequest(BaseModel):
+    summary_text: str
+
+
 def extract_text_from_pdfs(group_id: str, db: Session) -> str:
     """
     Extract text from all PDFs uploaded for a group.
@@ -901,4 +905,62 @@ def generate_summary(
         "end_time": new_summary.end_time.isoformat() if new_summary.end_time else None,
         "source_last_message_ts": new_summary.source_last_message_ts.isoformat() if new_summary.source_last_message_ts else None,
         "source_message_count": new_summary.source_message_count
+    }
+
+
+@app.get("/groups/{group_id}/student-summary")
+def get_student_summary(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the student summary for a group.
+    Access: All group members (students, supervisors, coordinators).
+    """
+    # Check if group exists in database
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization (all group members can access)
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+    
+    # Return the student summary (can be None/empty)
+    return {
+        "group_id": group_id,
+        "summary_text": db_group.student_summary or ""
+    }
+
+
+@app.post("/groups/{group_id}/student-summary")
+def update_student_summary(
+    group_id: str,
+    request: StudentSummaryRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update the student summary for a group.
+    Access: All group members (students, supervisors, coordinators).
+    """
+    # Check if group exists in database
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Check authorization (all group members can update)
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+    
+    # Update the student summary
+    db_group.student_summary = request.summary_text
+    db.commit()
+    db.refresh(db_group)
+    
+    # Return the updated summary
+    return {
+        "group_id": group_id,
+        "summary_text": db_group.student_summary or ""
     }
