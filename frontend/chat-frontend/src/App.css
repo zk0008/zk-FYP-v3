@@ -379,6 +379,38 @@
     flex: 1;
 }
 
+/* Student Summary Styles */
+.student-summary-textarea {
+    width: 100%;
+    min-height: 300px;
+    padding: 12px;
+    font-size: 14px;
+    font-family: inherit;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    resize: vertical;
+    line-height: 1.6;
+    box-sizing: border-box;
+    margin: 0;
+}
+
+.student-summary-textarea:focus {
+    outline: none;
+    border-color: #1f1f1f;
+}
+
+.student-summary-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+}
+
+.student-summary-save-btn {
+    padding: 8px 16px;
+    font-size: 14px;
+}
+
 /* Login Page Styles */
 .login-container {
     min-height: 100vh;

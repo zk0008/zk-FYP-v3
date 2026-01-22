@@ -25,6 +25,10 @@ function App() {
     const [summary, setSummary] = useState(null);
     const [loadingSummary, setLoadingSummary] = useState(false);
     const [refreshingSummary, setRefreshingSummary] = useState(false);
+    const [studentSummary, setStudentSummary] = useState("");
+    const [loadingStudentSummary, setLoadingStudentSummary] = useState(false);
+    const [savingStudentSummary, setSavingStudentSummary] = useState(false);
+    const [studentSummaryText, setStudentSummaryText] = useState("");
     const pollingIntervalRef = useRef(null);
     const pollingTimeoutRef = useRef(null);
 
@@ -183,9 +187,9 @@ function App() {
         }
     }, [activeTab, selectedGroup, token]);
 
-    // Fetch summary when Overview tab is active and group is selected
+    // Fetch summary when AI Overview tab is active and group is selected
     useEffect(() => {
-        if (activeTab === "Overview" && selectedGroup && token) {
+        if (activeTab === "AI Overview" && selectedGroup && token) {
             setLoadingSummary(true);
             authFetch(
                 `${API_BASE}/groups/${selectedGroup.id}/summary?range=weekly`
@@ -201,6 +205,29 @@ function App() {
                 });
         } else {
             setSummary(null);
+        }
+    }, [activeTab, selectedGroup, token]);
+
+    // Fetch student summary when Student Overview tab is active and group is selected
+    useEffect(() => {
+        if (activeTab === "Student Overview" && selectedGroup && token) {
+            setLoadingStudentSummary(true);
+            authFetch(
+                `${API_BASE}/groups/${selectedGroup.id}/student-summary`
+            )
+                .then((res) => res.json())
+                .then((data) => {
+                    setStudentSummary(data.summary_text || "");
+                    setStudentSummaryText(data.summary_text || "");
+                    setLoadingStudentSummary(false);
+                })
+                .catch(() => {
+                    setError("Failed to load student summary");
+                    setLoadingStudentSummary(false);
+                });
+        } else {
+            setStudentSummary("");
+            setStudentSummaryText("");
         }
     }, [activeTab, selectedGroup, token]);
 
@@ -589,13 +616,21 @@ function App() {
                                 user?.role === "supervisor") && (
                                 <span
                                     className={
-                                        activeTab === "Overview" ? "active" : ""
+                                        activeTab === "AI Overview" ? "active" : ""
                                     }
-                                    onClick={() => setActiveTab("Overview")}
+                                    onClick={() => setActiveTab("AI Overview")}
                                 >
-                                    Overview
+                                    AI Overview
                                 </span>
                             )}
+                            <span
+                                className={
+                                    activeTab === "Student Overview" ? "active" : ""
+                                }
+                                onClick={() => setActiveTab("Student Overview")}
+                            >
+                                Student Overview
+                            </span>
                         </nav>
                     )}
                     {activeTab === "Chats" ? (
@@ -729,7 +764,7 @@ function App() {
                                 </>
                             )}
                         </div>
-                    ) : activeTab === "Overview" ? (
+                    ) : activeTab === "AI Overview" ? (
                         <div className="overview-panel">
                             {error && <p className="error-text">{error}</p>}
                             {!selectedGroup && !error && (
@@ -787,6 +822,107 @@ function App() {
                                         <p className="placeholder">
                                             No summary available.
                                         </p>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    ) : activeTab === "Student Overview" ? (
+                        <div className="overview-panel">
+                            {error && <p className="error-text">{error}</p>}
+                            {!selectedGroup && !error && (
+                                <p className="placeholder">
+                                    Select a chatroom to view student overview.
+                                </p>
+                            )}
+                            {selectedGroup && (
+                                <>
+                                    <div className="overview-header">
+                                        <h3>Student Overview</h3>
+                                    </div>
+                                    {loadingStudentSummary ? (
+                                        <p className="placeholder">
+                                            Loading student summary…
+                                        </p>
+                                    ) : (
+                                        <div className="overview-content">
+                                            <textarea
+                                                value={studentSummaryText}
+                                                onChange={(e) =>
+                                                    setStudentSummaryText(
+                                                        e.target.value
+                                                    )
+                                                }
+                                                placeholder="Write a collaborative summary for your group..."
+                                                className="student-summary-textarea"
+                                            />
+                                            <div className="student-summary-actions">
+                                                <button
+                                                    onClick={async () => {
+                                                        if (
+                                                            !selectedGroup ||
+                                                            !token
+                                                        ) {
+                                                            return;
+                                                        }
+
+                                                        setSavingStudentSummary(
+                                                            true
+                                                        );
+                                                        setError("");
+
+                                                        try {
+                                                            const response =
+                                                                await authFetch(
+                                                                    `${API_BASE}/groups/${selectedGroup.id}/student-summary`,
+                                                                    {
+                                                                        method:
+                                                                            "POST",
+                                                                        headers: {
+                                                                            "Content-Type":
+                                                                                "application/json",
+                                                                        },
+                                                                        body: JSON.stringify(
+                                                                            {
+                                                                                summary_text:
+                                                                                    studentSummaryText,
+                                                                            }
+                                                                        ),
+                                                                    }
+                                                                );
+                                                            if (!response.ok) {
+                                                                throw new Error(
+                                                                    "Failed to save student summary"
+                                                                );
+                                                            }
+                                                            const data =
+                                                                await response.json();
+                                                            setStudentSummary(
+                                                                data.summary_text ||
+                                                                    ""
+                                                            );
+                                                        } catch (err) {
+                                                            setError(
+                                                                "Failed to save student summary"
+                                                            );
+                                                        } finally {
+                                                            setSavingStudentSummary(
+                                                                false
+                                                            );
+                                                        }
+                                                    }}
+                                                    disabled={
+                                                        savingStudentSummary ||
+                                                        studentSummaryText ===
+                                                            studentSummary
+                                                    }
+                                                    className="download-btn student-summary-save-btn"
+                                                >
+                                                    {savingStudentSummary
+                                                        ? "Saving..."
+                                                        : "Save Summary"}
+                                                </button>
+                                            </div>
+                                        </div>
                                     )}
                                 </>
                             )}
