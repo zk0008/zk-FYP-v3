@@ -186,43 +186,38 @@
 .message-stack {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
 }
 
-.message-row {
+.message-card {
+    background: #fff;
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    padding: 10px 14px;
     display: flex;
-    gap: 8px;
-    font-size: 14px;
-    align-items: flex-start;
-}
-
-.message-row.ai-message {
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
 }
 
 .message-sender {
     font-weight: 600;
-    flex-shrink: 0;
+    font-size: 13px;
+    color: #1f1f1f;
+    margin: 0;
 }
 
-.message-content {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    flex: 1;
-    min-width: 0;
+.message-sender.ai-sender {
+    color: #0066cc;
 }
 
 .message-text {
     white-space: pre-wrap;
     word-wrap: break-word;
     line-height: 1.5;
-}
-
-.message-row.ai-message .message-text {
+    font-size: 14px;
     color: #333;
-    padding: 8px 0;
+    margin: 0;
 }
 
 .message-sources {

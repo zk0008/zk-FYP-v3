@@ -94,7 +94,15 @@ function App() {
             });
             if (!groupsResponse.ok) throw new Error("Failed to load groups");
             const groupsData = await groupsResponse.json();
-            setGroups(groupsData);
+            // Sort groups by number (Group 1, Group 2, etc.)
+            const extractGroupNumber = (groupName) => {
+                const match = groupName.match(/\d+/);
+                return match ? parseInt(match[0], 10) : 999;
+            };
+            const sortedGroups = groupsData.sort((a, b) => {
+                return extractGroupNumber(a.name) - extractGroupNumber(b.name);
+            });
+            setGroups(sortedGroups);
 
             setIsAuthenticated(true);
             setLoginLoading(false);
@@ -126,12 +134,24 @@ function App() {
         }
     }, [token]);
 
+    // Helper function to extract group number for sorting
+    const extractGroupNumber = (groupName) => {
+        const match = groupName.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 999;
+    };
+
     // Load groups when authenticated
     useEffect(() => {
         if (isAuthenticated && token) {
             authFetch(`${API_BASE}/my-groups`)
                 .then((res) => res.json())
-                .then(setGroups)
+                .then((groups) => {
+                    // Sort groups by number (Group 1, Group 2, etc.)
+                    const sortedGroups = groups.sort((a, b) => {
+                        return extractGroupNumber(a.name) - extractGroupNumber(b.name);
+                    });
+                    setGroups(sortedGroups);
+                })
                 .catch(() => setError("Failed to load groups"));
         }
     }, [isAuthenticated, token]);
@@ -599,10 +619,22 @@ function App() {
         return <LoginPage />;
     }
 
+    // Get dashboard title based on user role
+    const getDashboardTitle = () => {
+        if (user?.role === "coordinator") {
+            return "Coordinator Dashboard";
+        } else if (user?.role === "supervisor") {
+            return "Supervisor Dashboard";
+        } else if (user?.role === "student") {
+            return "Student Dashboard";
+        }
+        return "Dashboard";
+    };
+
     return (
         <div className="app-shell">
             <header className="top-bar">
-                <div className="brand">Supervisor Dashboard</div>
+                <div className="brand">{getDashboardTitle()}</div>
                 <div className="welcome">
                     Welcome, {user?.username || "User"}! ({user?.role || ""})
                 </div>
@@ -656,17 +688,14 @@ function App() {
                             >
                                 Documents
                             </span>
-                            {(user?.role === "coordinator" ||
-                                user?.role === "supervisor") && (
-                                <span
-                                    className={
-                                        activeTab === "AI Overview" ? "active" : ""
-                                    }
-                                    onClick={() => setActiveTab("AI Overview")}
-                                >
-                                    AI Overview
-                                </span>
-                            )}
+                            <span
+                                className={
+                                    activeTab === "AI Overview" ? "active" : ""
+                                }
+                                onClick={() => setActiveTab("AI Overview")}
+                            >
+                                AI Overview
+                            </span>
                             <span
                                 className={
                                     activeTab === "Student Overview" ? "active" : ""
@@ -696,19 +725,23 @@ function App() {
                                         {messages.map((msg) => (
                                             <div
                                                 key={msg.id}
-                                                className={`message-row ${
+                                                className={`message-card ${
                                                     msg.is_bot
                                                         ? "ai-message"
                                                         : ""
                                                 }`}
                                             >
-                                                <span className="message-sender">
+                                                <span
+                                                    className={`message-sender ${
+                                                        msg.sender === "AI Bot"
+                                                            ? "ai-sender"
+                                                            : ""
+                                                    }`}
+                                                >
                                                     {msg.sender}:
                                                 </span>
-                                                <div className="message-content">
-                                                    <div className="message-text">
-                                                        {msg.text}
-                                                    </div>
+                                                <div className="message-text">
+                                                    {msg.text}
                                                 </div>
                                             </div>
                                         ))}
