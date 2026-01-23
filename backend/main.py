@@ -17,9 +17,20 @@ from auth import hash_password, decode_token, verify_password, create_access_tok
 
 app = FastAPI(title="Group Chat Prototype")
 
+# CORS configuration - allow localhost for development and frontend URL from environment for production
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+# Add frontend URL from environment if it's different from localhost
+if frontend_url not in allowed_origins:
+    allowed_origins.append(frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
