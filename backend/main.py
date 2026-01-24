@@ -162,8 +162,8 @@ async def startup_event():
     # Ensure uploads directory exists
     PDF_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     # Only initialize demo data if SKIP_DEMO_DATA is not set (i.e., in local development)
-    if not os.getenv("SKIP_DEMO_DATA"):
-        init_demo_data()
+    #if not os.getenv("SKIP_DEMO_DATA"):
+        #init_demo_data()
 
 # Initialize OpenAI client with API key from environment variable
 openai_api_key = os.getenv("OPENAI_API_KEY")
