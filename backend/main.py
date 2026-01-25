@@ -22,6 +22,7 @@ frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
 allowed_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://ms3015-chatbot.vercel.app"
 ]
 
 # Add frontend URL from environment if it's different from localhost
