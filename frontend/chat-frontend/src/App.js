@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import "./App.css";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
 
 function App() {
     // Authentication state
@@ -152,7 +152,10 @@ function App() {
                 .then((groups) => {
                     // Sort groups by number (Group 1, Group 2, etc.)
                     const sortedGroups = groups.sort((a, b) => {
-                        return extractGroupNumber(a.name) - extractGroupNumber(b.name);
+                        return (
+                            extractGroupNumber(a.name) -
+                            extractGroupNumber(b.name)
+                        );
                     });
                     setGroups(sortedGroups);
                 })
@@ -163,7 +166,8 @@ function App() {
     // Function to scroll to bottom of messages (instant, no animation)
     const scrollToBottom = () => {
         if (messagesContainerRef.current) {
-            messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+            messagesContainerRef.current.scrollTop =
+                messagesContainerRef.current.scrollHeight;
         }
     };
 
@@ -252,9 +256,7 @@ function App() {
     useEffect(() => {
         if (activeTab === "Student Overview" && selectedGroup && token) {
             setLoadingStudentSummary(true);
-            authFetch(
-                `${API_BASE}/groups/${selectedGroup.id}/student-summary`
-            )
+            authFetch(`${API_BASE}/groups/${selectedGroup.id}/student-summary`)
                 .then((res) => res.json())
                 .then((data) => {
                     setStudentSummary(data.summary_text || "");
@@ -404,7 +406,9 @@ function App() {
         }
 
         const allowedExtensions = [".pdf", ".doc", ".docx"];
-        const fileExt = file.name.toLowerCase().substring(file.name.lastIndexOf("."));
+        const fileExt = file.name
+            .toLowerCase()
+            .substring(file.name.lastIndexOf("."));
         if (!allowedExtensions.includes(fileExt)) {
             setError("Only PDF, DOC, and DOCX files are allowed");
             setSelectedFile(null);
@@ -479,44 +483,50 @@ function App() {
         const k = 1024;
         const sizes = ["Bytes", "KB", "MB", "GB"];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+        return (
+            Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i]
+        );
     };
 
     // Helper function to format relative time
     const formatRelativeTime = (dateString) => {
         if (!dateString) return "Unknown";
-        
+
         // Ensure the timestamp is treated as UTC
         let timestampStr = String(dateString).trim();
-        
+
         // Check if it already has timezone info (Z, +, or - after the time part)
         const hasTimezone =
             timestampStr.endsWith("Z") ||
             timestampStr.match(/[+-]\d{2}:\d{2}$/) ||
             timestampStr.match(/[+-]\d{4}$/);
-        
+
         if (!hasTimezone) {
             // Remove microseconds if present, then append 'Z' to indicate UTC
             timestampStr = timestampStr.split(".")[0] + "Z";
         }
-        
+
         const date = new Date(timestampStr);
         const now = new Date();
-        
+
         // Verify the date is valid
         if (isNaN(date.getTime())) {
             console.error("Invalid date:", dateString);
             return "Unknown";
         }
-        
+
         const diffInSeconds = Math.floor((now - date) / 1000);
-        
+
         if (diffInSeconds < 0) return "just now"; // Handle future dates
         if (diffInSeconds < 60) return "just now";
-        if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} minutes ago`;
-        if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} hours ago`;
-        if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)} days ago`;
-        if (diffInSeconds < 2592000) return `${Math.floor(diffInSeconds / 604800)} weeks ago`;
+        if (diffInSeconds < 3600)
+            return `${Math.floor(diffInSeconds / 60)} minutes ago`;
+        if (diffInSeconds < 86400)
+            return `${Math.floor(diffInSeconds / 3600)} hours ago`;
+        if (diffInSeconds < 604800)
+            return `${Math.floor(diffInSeconds / 86400)} days ago`;
+        if (diffInSeconds < 2592000)
+            return `${Math.floor(diffInSeconds / 604800)} weeks ago`;
         return `${Math.floor(diffInSeconds / 2592000)} months ago`;
     };
 
@@ -565,7 +575,7 @@ function App() {
         const confirmed = window.confirm(
             "Are you sure you want to delete this document?"
         );
-        
+
         if (!confirmed) {
             return;
         }
@@ -577,11 +587,11 @@ function App() {
                     method: "DELETE",
                 }
             );
-            
+
             if (!response.ok) {
                 throw new Error("Failed to delete document");
             }
-            
+
             // Remove document from local state
             setDocuments((prev) => prev.filter((doc) => doc.id !== documentId));
         } catch (err) {
@@ -619,10 +629,10 @@ function App() {
     // Helper function to format summary text with bold "Key points:" and "Supervisor Action Plan:" and bullet points
     const formatSummaryText = (text) => {
         if (!text) return "";
-        
+
         // Replace dashes with bullet points
         let formatted = text.replace(/^(\s*)-\s+/gm, "$1• ");
-        
+
         // Split by lines to handle bold headings
         const lines = formatted.split("\n");
         return lines.map((line, index) => {
@@ -850,7 +860,9 @@ function App() {
                             </span>
                             <span
                                 className={
-                                    activeTab === "Student Overview" ? "active" : ""
+                                    activeTab === "Student Overview"
+                                        ? "active"
+                                        : ""
                                 }
                                 onClick={() => setActiveTab("Student Overview")}
                             >
@@ -860,7 +872,10 @@ function App() {
                     )}
                     {activeTab === "Chats" ? (
                         <>
-                            <div className="messages" ref={messagesContainerRef}>
+                            <div
+                                className="messages"
+                                ref={messagesContainerRef}
+                            >
                                 {error && <p className="error-text">{error}</p>}
                                 {!selectedGroup && !error && (
                                     <p className="placeholder">
@@ -944,18 +959,24 @@ function App() {
                                             onDragOver={handleDragOver}
                                             onDragLeave={handleDragLeave}
                                             onDrop={handleDrop}
-                                            onClick={() => fileInputRef.current?.click()}
+                                            onClick={() =>
+                                                fileInputRef.current?.click()
+                                            }
                                         >
-                                            <div className="upload-icon">📎</div>
+                                            <div className="upload-icon">
+                                                📎
+                                            </div>
                                             <p className="upload-text">
-                                                Drag & drop your file here or click to browse
+                                                Drag & drop your file here or
+                                                click to browse
                                             </p>
                                             <p className="upload-limits">
                                                 PDF, DOC, DOCX
                                             </p>
                                             {selectedFile && (
                                                 <p className="selected-file">
-                                                    Selected: {selectedFile.name}
+                                                    Selected:{" "}
+                                                    {selectedFile.name}
                                                 </p>
                                             )}
                                             <input
@@ -969,7 +990,9 @@ function App() {
                                         <div className="upload-actions">
                                             <button
                                                 className="choose-file-btn"
-                                                onClick={() => fileInputRef.current?.click()}
+                                                onClick={() =>
+                                                    fileInputRef.current?.click()
+                                                }
                                                 disabled={uploading}
                                             >
                                                 Choose File
@@ -977,9 +1000,13 @@ function App() {
                                             <button
                                                 className="upload-btn"
                                                 onClick={handleUpload}
-                                                disabled={!selectedFile || uploading}
+                                                disabled={
+                                                    !selectedFile || uploading
+                                                }
                                             >
-                                                {uploading ? "Uploading..." : "Upload"}
+                                                {uploading
+                                                    ? "Uploading..."
+                                                    : "Upload"}
                                             </button>
                                         </div>
                                     </div>
@@ -987,7 +1014,10 @@ function App() {
                                         <div className="documents-list-header">
                                             <h3>Your Documents</h3>
                                             <span className="document-count">
-                                                {documents.length} document{documents.length !== 1 ? "s" : ""}
+                                                {documents.length} document
+                                                {documents.length !== 1
+                                                    ? "s"
+                                                    : ""}
                                             </span>
                                         </div>
                                         {loadingDocuments ? (
@@ -996,12 +1026,15 @@ function App() {
                                             </p>
                                         ) : documents.length === 0 ? (
                                             <div className="documents-empty-state">
-                                                <div className="empty-state-icon">📭</div>
+                                                <div className="empty-state-icon">
+                                                    📭
+                                                </div>
                                                 <h4 className="empty-state-heading">
                                                     No documents yet
                                                 </h4>
                                                 <p className="empty-state-text">
-                                                    Upload your first document to get started
+                                                    Upload your first document
+                                                    to get started
                                                 </p>
                                             </div>
                                         ) : (
@@ -1011,23 +1044,37 @@ function App() {
                                                         key={doc.id}
                                                         className="document-card"
                                                     >
-                                                        <div className="document-icon">📄</div>
+                                                        <div className="document-icon">
+                                                            📄
+                                                        </div>
                                                         <div className="document-info">
                                                             <div className="document-name">
                                                                 {doc.filename}
                                                             </div>
                                                             <div className="document-metadata">
                                                                 <span className="metadata-item">
-                                                                    <span className="metadata-icon">👤</span>
-                                                                    {doc.uploaded_by || "Unknown"}
+                                                                    <span className="metadata-icon">
+                                                                        👤
+                                                                    </span>
+                                                                    {doc.uploaded_by ||
+                                                                        "Unknown"}
                                                                 </span>
                                                                 <span className="metadata-item">
-                                                                    <span className="metadata-icon">📦</span>
-                                                                    {formatFileSize(doc.file_size || 0)}
+                                                                    <span className="metadata-icon">
+                                                                        📦
+                                                                    </span>
+                                                                    {formatFileSize(
+                                                                        doc.file_size ||
+                                                                            0
+                                                                    )}
                                                                 </span>
                                                                 <span className="metadata-item">
-                                                                    <span className="metadata-icon">📅</span>
-                                                                    {formatRelativeTime(doc.uploaded_at)}
+                                                                    <span className="metadata-icon">
+                                                                        📅
+                                                                    </span>
+                                                                    {formatRelativeTime(
+                                                                        doc.uploaded_at
+                                                                    )}
                                                                 </span>
                                                             </div>
                                                         </div>
@@ -1035,7 +1082,9 @@ function App() {
                                                             <button
                                                                 className="view-btn"
                                                                 onClick={() =>
-                                                                    handleViewDocument(doc.id)
+                                                                    handleViewDocument(
+                                                                        doc.id
+                                                                    )
                                                                 }
                                                             >
                                                                 View
@@ -1054,7 +1103,9 @@ function App() {
                                                             <button
                                                                 className="delete-btn"
                                                                 onClick={() =>
-                                                                    handleDeleteDocument(doc.id)
+                                                                    handleDeleteDocument(
+                                                                        doc.id
+                                                                    )
                                                                 }
                                                             >
                                                                 Delete
@@ -1138,10 +1189,7 @@ function App() {
                                         <h3>Student Overview</h3>
                                         <button
                                             onClick={async () => {
-                                                if (
-                                                    !selectedGroup ||
-                                                    !token
-                                                ) {
+                                                if (!selectedGroup || !token) {
                                                     return;
                                                 }
 
