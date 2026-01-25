@@ -26,4 +26,4 @@ passlib[bcrypt]
 PyJWT
 cryptography
 alembic
-bcrypt
+bcrypt==4.0.1
