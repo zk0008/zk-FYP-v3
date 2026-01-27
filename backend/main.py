@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 from pypdf import PdfReader
 from sqlalchemy.orm import Session
+from tavily import TavilyClient
 
 # Import database Base for Alembic to discover models
 from database import Base, SessionLocal, get_db, engine
@@ -259,6 +261,40 @@ def extract_text_from_pdfs(group_id: str, db: Session) -> str:
     return "\n\n".join(all_text)
 
 
+def web_search(query: str, max_results: int = 5) -> str:
+    """
+    Search the web using Tavily API and return formatted results.
+    
+    Args:
+        query: Search query string
+        max_results: Maximum number of results to return (default: 5)
+    
+    Returns:
+        Formatted string with search results (title, content, URL) or error message
+    """
+    try:
+        tavily_api_key = os.getenv("TAVILY_API_KEY")
+        if not tavily_api_key:
+            return "Error: TAVILY_API_KEY environment variable not set."
+        
+        client = TavilyClient(api_key=tavily_api_key)
+        response = client.search(query=query, max_results=max_results)
+        
+        if not response.get("results"):
+            return "No search results found."
+        
+        formatted_results = []
+        for result in response["results"]:
+            title = result.get("title", "No title")
+            content = result.get("content", "No content available")
+            url = result.get("url", "No URL available")
+            formatted_results.append(f"Title: {title}\nContent: {content}\nSource: {url}\n")
+        
+        return "\n---\n".join(formatted_results)
+    except Exception as e:
+        return f"Error performing web search: {str(e)}"
+
+
 def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: str = None):
     """
     Background task to generate AI reply and save it to the database.
@@ -294,29 +330,159 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
             
             # Build system message based on whether PDFs exist
             if pdf_context:
-                system_message = (
-                    "You are a helpful assistant in a group chat. "
-                    "Answer questions based on the following documents provided for this group. "
-                    "If the answer is not in the documents, use your general knowledge. "
-                    "Provide concise and helpful responses.\n\n"
-                    f"Documents for this group:\n{pdf_context}"
-                )
+                system_message = """You are an AI assistant in a university group chat for a Materials Science module.
+
+Guidelines:
+- Provide detailed, well-structured responses using markdown formatting
+- Use **bold** for emphasis, bullet points for lists, numbered lists for steps
+- When referencing uploaded documents, always cite them as [document_name.pdf]
+- If you don't know something or the information isn't in the documents, explicitly say so - never make up information
+- Be professional but conversational for an academic setting
+
+You have access to the following documents uploaded to this group:
+
+""" + f"{pdf_context}" + """
+
+When answering questions, prioritize information from these documents and cite them appropriately.
+
+Your goal: Help students with their Materials Science coursework through accurate, helpful responses."""
             else:
-                system_message = "You are a helpful assistant in a group chat. Provide concise and helpful responses."
+                system_message = """You are an AI assistant in a university group chat for a Materials Science module.
+
+Guidelines:
+- Provide detailed, comprehensive, and well-structured responses
+- Use markdown formatting: **bold** for emphasis, bullet points for lists, numbered lists for steps
+- Break down complex topics into clear, understandable explanations
+- If you don't know something, explicitly say so - never make up information
+- Be professional but conversational for an academic setting
+
+Your goal: Help students with their Materials Science coursework through thorough, accurate, and helpful responses."""
             
-            # Call OpenAI API
+            # Define tools for function calling
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Search the web for current information. Use this when users ask about recent events, news, current data, or topics requiring up-to-date information.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The search query to look up on the web"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "Maximum number of search results to return",
+                                    "default": 5
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                }
+            ]
+            
+            # Fetch last 10 messages from this group for conversation context
+            recent_messages = db.query(models.Message).filter(
+                models.Message.group_id == db_group_id
+            ).order_by(models.Message.timestamp.desc()).limit(10).all()
+            
+            # Reverse to get chronological order (oldest first)
+            recent_messages.reverse()
+            
+            # Build conversation history
+            conversation_history = []
+            for msg in recent_messages:
+                if msg.is_AI:
+                    # AI messages: format as assistant role
+                    conversation_history.append({
+                        "role": "assistant",
+                        "content": msg.content
+                    })
+                else:
+                    # User messages: format as user role with username
+                    username = msg.user.username if msg.user else "Unknown"
+                    conversation_history.append({
+                        "role": "user",
+                        "content": f"{username}: {msg.content}"
+                    })
+            
+            # Initialize messages list with system message, conversation history, and current question
+            messages = [
+                {"role": "system", "content": system_message}
+            ]
+            # Add conversation history
+            messages.extend(conversation_history)
+            # Add current user question
+            messages.append({"role": "user", "content": question})
+            
+            # Debug logging before API call
+            print(f"DEBUG: User question: {question}")
+            print(f"DEBUG: Tools available: {len(tools)} tool(s)")
+            
+            # Call OpenAI API with function calling
             response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": question}
-                ],
+                model="gpt-4o",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
                 max_tokens=500,
                 temperature=0.7
             )
             
-            # Extract the AI's response text
-            ai_text = response.choices[0].message.content
+            # Debug logging after API call
+            print(f"DEBUG: Tool calls: {response.choices[0].message.tool_calls}")
+            
+            # Handle tool calls if present
+            message = response.choices[0].message
+            if message.tool_calls:
+                # Execute web_search tool call
+                for tool_call in message.tool_calls:
+                    if tool_call.function.name == "web_search":
+                        function_args = json.loads(tool_call.function.arguments)
+                        search_query = function_args.get("query", "")
+                        max_results = function_args.get("max_results", 5)
+                        
+                        # Execute web search
+                        search_results = web_search(search_query, max_results)
+                        
+                        # Append tool result to messages
+                        messages.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": tool_call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": "web_search",
+                                        "arguments": tool_call.function.arguments
+                                    }
+                                }
+                            ]
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": "web_search",
+                            "content": search_results
+                        })
+                
+                # Get final response with search results
+                final_response = openai_client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    max_tokens=500,
+                    temperature=0.7
+                )
+                ai_text = final_response.choices[0].message.content
+            else:
+                # No tool calls, use response directly
+                ai_text = message.content
             
             # Prepend username mention if available
             if username:
