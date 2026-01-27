@@ -230,6 +230,31 @@
     margin: 0;
 }
 
+/* Markdown styling for AI messages */
+.ai-message-content {
+    line-height: 1.5;
+}
+
+.ai-message-content p {
+    margin: 0.4em 0;
+}
+
+.ai-message-content ul,
+.ai-message-content ol {
+    margin: 0.25em 0;
+    padding-left: 1.4em;
+}
+
+.ai-message-content li {
+    margin: 0.2em 0;
+}
+
+.ai-message-content h1,
+.ai-message-content h2,
+.ai-message-content h3 {
+    margin: 0.6em 0 0.4em 0;
+}
+
 .message-sources {
     margin-top: 8px;
     padding-top: 8px;

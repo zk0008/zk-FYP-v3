@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
+import ReactMarkdown from "react-markdown";
 import "./App.css";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
@@ -36,6 +37,7 @@ function App() {
     const messagesEndRef = useRef(null);
     const messagesContainerRef = useRef(null);
     const messagePollingIntervalRef = useRef(null);
+    const shouldForceScrollToBottomRef = useRef(false);
 
     // Helper function for authenticated API calls
     const authFetch = (url, options = {}) => {
@@ -172,6 +174,7 @@ function App() {
                 clearInterval(messagePollingIntervalRef.current);
                 messagePollingIntervalRef.current = null;
             }
+            shouldForceScrollToBottomRef.current = false;
             return;
         }
 
@@ -194,6 +197,8 @@ function App() {
 
         // Load messages immediately
         setLoadingMessages(true);
+        // For a freshly selected group, always scroll to bottom on the first load
+        shouldForceScrollToBottomRef.current = true;
         loadMessages();
 
         // Set up polling to load messages every 1 second
@@ -225,8 +230,16 @@ function App() {
                 container.scrollTop -
                 container.clientHeight;
 
-            if (distanceFromBottom < 20) {
-                endElement.scrollIntoView({ behavior: "smooth" });
+            if (
+                shouldForceScrollToBottomRef.current ||
+                distanceFromBottom < 20
+            ) {
+                endElement.scrollIntoView({
+                    behavior: shouldForceScrollToBottomRef.current
+                        ? "auto"
+                        : "smooth",
+                });
+                shouldForceScrollToBottomRef.current = false;
             }
         }, 50);
     }, [messages]);
@@ -941,7 +954,15 @@ function App() {
                                                     {msg.sender}:
                                                 </span>
                                                 <div className="message-text">
-                                                    {msg.text}
+                                                    {msg.sender === "AI Bot" ? (
+                                                        <div className="ai-message-content">
+                                                            <ReactMarkdown>
+                                                                {msg.text}
+                                                            </ReactMarkdown>
+                                                        </div>
+                                                    ) : (
+                                                        msg.text
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}
