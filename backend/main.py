@@ -330,22 +330,18 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
             
             # Build system message based on whether PDFs exist
             if pdf_context:
-                system_message = """You are an AI assistant in a university group chat for a Materials Science module.
+                system_message = """IMPORTANT: The complete text content from uploaded documents is provided below. When users ask about documents or topics covered in these documents, search through this content and cite it as [filename.pdf].
 
-Guidelines:
-- Provide detailed, well-structured responses using markdown formatting
-- Use **bold** for emphasis, bullet points for lists, numbered lists for steps
-- When referencing uploaded documents, always cite them as [document_name.pdf]
-- If you don't know something or the information isn't in the documents, explicitly say so - never make up information
-- Be professional but conversational for an academic setting
+If the user's question is NOT covered in the provided documents, you should:
+1. Check if it's a current events question → use web_search tool
+2. If it's general knowledge → use your training data
+3. Be clear about which source you're using
 
-You have access to the following documents uploaded to this group:
+DO NOT say you cannot access documents - the full text is provided below. However, DO acknowledge when information is not in the documents and you're using other sources.
 
-""" + f"{pdf_context}" + """
+Document content:
 
-When answering questions, prioritize information from these documents and cite them appropriately.
-
-Your goal: Help students with their Materials Science coursework through accurate, helpful responses."""
+""" + f"{pdf_context}"
             else:
                 system_message = """You are an AI assistant in a university group chat for a Materials Science module.
 
