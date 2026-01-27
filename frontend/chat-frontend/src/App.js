@@ -164,45 +164,6 @@ function App() {
         }
     }, [isAuthenticated, token]);
 
-    // Function to check if user is near the bottom of the messages container
-    const isNearBottom = () => {
-        if (!messagesContainerRef.current) {
-            return false;
-        }
-        const container = messagesContainerRef.current;
-        const scrollTop = container.scrollTop;
-        const scrollHeight = container.scrollHeight;
-        const clientHeight = container.clientHeight;
-        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-        // Return true if within 100 pixels of the bottom
-        return distanceFromBottom <= 100;
-    };
-
-    // Function to scroll to bottom of messages
-    // - If container isn't mounted yet (initial load), always scroll
-    // - If container exists, only scroll if user is near bottom
-    const scrollToBottom = () => {
-        if (!messagesContainerRef.current) {
-            // No container yet, always scroll (initial load)
-            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-            return;
-        }
-
-        if (isNearBottom()) {
-            // Container exists and user is at bottom, scroll
-            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }
-        // else: user scrolled up, don't scroll
-    };
-
-    // Function to force scroll to bottom (used when initially loading or user sends a message)
-    const forceScrollToBottom = () => {
-        if (messagesContainerRef.current) {
-            messagesContainerRef.current.scrollTop =
-                messagesContainerRef.current.scrollHeight;
-        }
-    };
-
     useEffect(() => {
         if (!selectedGroup || !token) {
             setMessages([]);
@@ -215,7 +176,7 @@ function App() {
         }
 
         // Function to load messages (defined inside useEffect to avoid stale closures)
-        const loadMessages = (isInitialLoad = false) => {
+        const loadMessages = () => {
             if (!selectedGroup || !token) {
                 return;
             }
@@ -224,12 +185,6 @@ function App() {
                 .then((data) => {
                     setMessages(data);
                     setLoadingMessages(false);
-                    // Force scroll on initial load, otherwise only scroll if user is near bottom
-                    if (isInitialLoad) {
-                        setTimeout(forceScrollToBottom, 0);
-                    } else {
-                        setTimeout(scrollToBottom, 0);
-                    }
                 })
                 .catch(() => {
                     setError("Failed to load messages");
@@ -237,13 +192,13 @@ function App() {
                 });
         };
 
-        // Load messages immediately (force scroll on initial load)
+        // Load messages immediately
         setLoadingMessages(true);
-        loadMessages(true);
+        loadMessages();
 
-        // Set up polling to load messages every 1 second (don't force scroll)
+        // Set up polling to load messages every 1 second
         messagePollingIntervalRef.current = setInterval(() => {
-            loadMessages(false);
+            loadMessages();
         }, 1000);
 
         // Cleanup function to clear interval when component unmounts or dependencies change
@@ -257,11 +212,24 @@ function App() {
 
     // Scroll to bottom when messages change (only if user is near bottom)
     useEffect(() => {
-        if (!loadingMessages && messages.length > 0) {
-            // Only auto-scroll if user is near bottom (don't interrupt reading old messages)
-            setTimeout(scrollToBottom, 0);
-        }
-    }, [messages, loadingMessages]);
+        if (messages.length === 0) return;
+
+        setTimeout(() => {
+            const container = messagesContainerRef.current;
+            const endElement = messagesEndRef.current;
+
+            if (!container || !endElement) return;
+
+            const distanceFromBottom =
+                container.scrollHeight -
+                container.scrollTop -
+                container.clientHeight;
+
+            if (distanceFromBottom < 150) {
+                endElement.scrollIntoView({ behavior: "smooth" });
+            }
+        }, 50);
+    }, [messages]);
 
     // Cleanup polling intervals on unmount or when group changes
     useEffect(() => {
@@ -363,8 +331,6 @@ function App() {
         };
         setMessages((prev) => [...prev, optimisticMessage]);
         setNewMessage("");
-        // Force scroll to bottom when user sends a message
-        setTimeout(forceScrollToBottom, 0);
 
         // Send POST request
         authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`, {
