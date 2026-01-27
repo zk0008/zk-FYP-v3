@@ -35,6 +35,7 @@ function App() {
     const pollingTimeoutRef = useRef(null);
     const messagesEndRef = useRef(null);
     const messagesContainerRef = useRef(null);
+    const messagePollingIntervalRef = useRef(null);
 
     // Helper function for authenticated API calls
     const authFetch = (url, options = {}) => {
@@ -174,21 +175,49 @@ function App() {
     useEffect(() => {
         if (!selectedGroup || !token) {
             setMessages([]);
+            // Clear any existing polling interval
+            if (messagePollingIntervalRef.current) {
+                clearInterval(messagePollingIntervalRef.current);
+                messagePollingIntervalRef.current = null;
+            }
             return;
         }
+
+        // Function to load messages (defined inside useEffect to avoid stale closures)
+        const loadMessages = () => {
+            if (!selectedGroup || !token) {
+                return;
+            }
+            authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`)
+                .then((res) => res.json())
+                .then((data) => {
+                    setMessages(data);
+                    setLoadingMessages(false);
+                    // Scroll to bottom immediately after messages are loaded
+                    setTimeout(scrollToBottom, 0);
+                })
+                .catch(() => {
+                    setError("Failed to load messages");
+                    setLoadingMessages(false);
+                });
+        };
+
+        // Load messages immediately
         setLoadingMessages(true);
-        authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`)
-            .then((res) => res.json())
-            .then((data) => {
-                setMessages(data);
-                setLoadingMessages(false);
-                // Scroll to bottom immediately after messages are loaded
-                setTimeout(scrollToBottom, 0);
-            })
-            .catch(() => {
-                setError("Failed to load messages");
-                setLoadingMessages(false);
-            });
+        loadMessages();
+
+        // Set up polling to load messages every 1 second
+        messagePollingIntervalRef.current = setInterval(() => {
+            loadMessages();
+        }, 1000);
+
+        // Cleanup function to clear interval when component unmounts or dependencies change
+        return () => {
+            if (messagePollingIntervalRef.current) {
+                clearInterval(messagePollingIntervalRef.current);
+                messagePollingIntervalRef.current = null;
+            }
+        };
     }, [selectedGroup, token]);
 
     // Scroll to bottom when messages change
