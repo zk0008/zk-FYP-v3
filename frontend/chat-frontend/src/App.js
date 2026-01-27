@@ -178,13 +178,21 @@ function App() {
         return distanceFromBottom <= 100;
     };
 
-    // Function to scroll to bottom of messages (instant, no animation)
-    // Only scrolls if user is already near the bottom
+    // Function to scroll to bottom of messages
+    // - If container isn't mounted yet (initial load), always scroll
+    // - If container exists, only scroll if user is near bottom
     const scrollToBottom = () => {
-        if (messagesContainerRef.current && isNearBottom()) {
-            messagesContainerRef.current.scrollTop =
-                messagesContainerRef.current.scrollHeight;
+        if (!messagesContainerRef.current) {
+            // No container yet, always scroll (initial load)
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            return;
         }
+
+        if (isNearBottom()) {
+            // Container exists and user is at bottom, scroll
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }
+        // else: user scrolled up, don't scroll
     };
 
     // Function to force scroll to bottom (used when initially loading or user sends a message)
