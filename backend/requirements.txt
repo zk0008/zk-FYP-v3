@@ -26,4 +26,5 @@ passlib[bcrypt]
 PyJWT
 cryptography
 alembic
-bcrypt==4.0.1tavily-python
+bcrypt==4.0.1
+tavily-python
