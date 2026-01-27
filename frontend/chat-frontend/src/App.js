@@ -225,7 +225,7 @@ function App() {
                 container.scrollTop -
                 container.clientHeight;
 
-            if (distanceFromBottom < 150) {
+            if (distanceFromBottom < 20) {
                 endElement.scrollIntoView({ behavior: "smooth" });
             }
         }, 50);
