@@ -1,8 +1,15 @@
 import React, { useEffect, useState, useRef } from "react";
-import ReactMarkdown from "react-markdown";
 import "./App.css";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
+
+function formatPlainText(text) {
+    return text
+        .replace(/###\s*(.*?)$/gm, "<strong>$1</strong>") // ### headers to bold
+        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") // **text** to bold
+        .replace(/^\s*[-*]\s/gm, "• ") // - bullets to •
+        .replace(/\n/g, "<br/>"); // line breaks
+}
 
 function App() {
     // Authentication state
@@ -953,17 +960,17 @@ function App() {
                                                 >
                                                     {msg.sender}:
                                                 </span>
-                                                <div className="message-text">
-                                                    {msg.sender === "AI Bot" ? (
-                                                        <div className="ai-message-content">
-                                                            <ReactMarkdown>
-                                                                {msg.text}
-                                                            </ReactMarkdown>
-                                                        </div>
-                                                    ) : (
-                                                        msg.text
-                                                    )}
-                                                </div>
+                                                <div
+                                                    className="message-text"
+                                                    style={{
+                                                        whiteSpace: "pre-wrap",
+                                                    }}
+                                                    dangerouslySetInnerHTML={{
+                                                        __html: formatPlainText(
+                                                            msg.text
+                                                        ),
+                                                    }}
+                                                />
                                             </div>
                                         ))}
                                         {!messages.length && (

@@ -339,6 +339,9 @@ If the user's question is NOT covered in the provided documents, you should:
 
 DO NOT say you cannot access documents - the full text is provided below. However, DO acknowledge when information is not in the documents and you're using other sources.
 
+Formatting guidelines:
+- Use markdown formatting: **bold** for emphasis, bullet points for lists
+
 Document content:
 
 """ + f"{pdf_context}"
