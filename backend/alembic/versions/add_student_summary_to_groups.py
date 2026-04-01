@@ -29,3 +29,5 @@ def downgrade() -> None:
     """Remove student_summary column from groups table."""
     op.drop_column('groups', 'student_summary')
 
+
+

@@ -1,0 +1,23 @@
+# Environment variables
+.env
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/chat-frontend/node_modules/
+
+# Database
+*.db
+*.sqlite
+
+# Mac
+.DS_Store
+
+# Uploads
+backend/uploads/
