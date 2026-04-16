@@ -21,3 +21,7 @@ frontend/chat-frontend/node_modules/
 
 # Uploads
 backend/uploads/
+
+# Local AI tooling files
+ARCHAEOLOGY.md
+CLAUDE.md
