@@ -28,3 +28,5 @@ cryptography
 alembic
 bcrypt==4.0.1
 tavily-python
+chromadb
+sentence-transformers

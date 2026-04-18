@@ -16,6 +16,7 @@ from tavily import TavilyClient
 from database import Base, SessionLocal, get_db, engine
 import models  # Import models so Alembic can see them
 from auth import hash_password, decode_token, verify_password, create_access_token
+from rag import index_document, get_relevant_context, get_top_document
 
 app = FastAPI(title="Group Chat Prototype")
 
@@ -226,40 +227,6 @@ class StudentSummaryRequest(BaseModel):
     summary_text: str
 
 
-def extract_text_from_pdfs(group_id: str, db: Session) -> str:
-    """
-    Extract text from all PDFs uploaded for a group.
-    Returns concatenated text from all PDFs, or empty string if no PDFs.
-    """
-    # Query documents from database for this group
-    documents = db.query(models.Document).filter(
-        models.Document.group_id == group_id
-    ).all()
-    
-    if not documents:
-        return ""
-    
-    all_text = []
-    for doc in documents:
-        file_path = Path(doc.stored_path)
-        if not file_path.exists():
-            continue
-        
-        try:
-            reader = PdfReader(file_path)
-            pdf_text = []
-            for page in reader.pages:
-                pdf_text.append(page.extract_text())
-            combined_text = "\n".join(pdf_text)
-            if combined_text.strip():
-                all_text.append(f"--- Content from {doc.filename} ---\n{combined_text}")
-        except Exception as e:
-            # If PDF reading fails, skip this document
-            print(f"Error reading PDF {doc.filename}: {str(e)}")
-            continue
-    
-    return "\n\n".join(all_text)
-
 
 def web_search(query: str, max_results: int = 5) -> str:
     """
@@ -296,212 +263,16 @@ def web_search(query: str, max_results: int = 5) -> str:
 
 
 def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: str = None):
-    """
-    Background task to generate AI reply and save it to the database.
-    This runs asynchronously after the POST endpoint returns.
-    username: The username of the user who asked the question (for mention in response)
-    """
     db = SessionLocal()
     try:
-        # Verify group exists
         db_group = db.query(models.Group).filter(models.Group.id == db_group_id).first()
         if not db_group:
-            return  # Group doesn't exist, skip
-        
+            return
+
         if not openai_client:
-            # If OpenAI client is not initialized, save error message
             error_message = "Error: OPENAI_API_KEY environment variable not set. Please configure your API key."
             if username:
                 error_message = f"@{username}: {error_message}"
-            
-            ai_message = models.Message(
-                group_id=db_group_id,
-                user_id=None,  # AI messages have no user
-                content=error_message,
-                is_AI=True
-            )
-            db.add(ai_message)
-            db.commit()
-            return
-        
-        try:
-            # Extract text from PDFs uploaded for this group (for RAG - documents influence answers silently)
-            pdf_context = extract_text_from_pdfs(group_id, db)
-            
-            # Build system message based on whether PDFs exist
-            if pdf_context:
-                system_message = """IMPORTANT: The complete text content from uploaded documents is provided below. When users ask about documents or topics covered in these documents, search through this content and cite it as [filename.pdf].
-
-If the user's question is NOT covered in the provided documents, you should:
-1. Check if it's a current events question → use web_search tool
-2. If it's general knowledge → use your training data
-3. Be clear about which source you're using
-
-DO NOT say you cannot access documents - the full text is provided below. However, DO acknowledge when information is not in the documents and you're using other sources.
-
-Formatting guidelines:
-- Use markdown formatting: **bold** for emphasis, bullet points for lists
-
-Document content:
-
-""" + f"{pdf_context}"
-            else:
-                system_message = """You are an AI assistant in a university group chat for a Materials Science module.
-
-Guidelines:
-- Provide detailed, comprehensive, and well-structured responses
-- Use markdown formatting: **bold** for emphasis, bullet points for lists, numbered lists for steps
-- Break down complex topics into clear, understandable explanations
-- If you don't know something, explicitly say so - never make up information
-- Be professional but conversational for an academic setting
-
-Your goal: Help students with their Materials Science coursework through thorough, accurate, and helpful responses."""
-            
-            # Define tools for function calling
-            tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "web_search",
-                        "description": "Search the web for current information. Use this when users ask about recent events, news, current data, or topics requiring up-to-date information.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The search query to look up on the web"
-                                },
-                                "max_results": {
-                                    "type": "integer",
-                                    "description": "Maximum number of search results to return",
-                                    "default": 5
-                                }
-                            },
-                            "required": ["query"]
-                        }
-                    }
-                }
-            ]
-            
-            # Fetch last 10 messages from this group for conversation context
-            recent_messages = db.query(models.Message).filter(
-                models.Message.group_id == db_group_id
-            ).order_by(models.Message.timestamp.desc()).limit(10).all()
-            
-            # Reverse to get chronological order (oldest first)
-            recent_messages.reverse()
-            
-            # Build conversation history
-            conversation_history = []
-            for msg in recent_messages:
-                if msg.is_AI:
-                    # AI messages: format as assistant role
-                    conversation_history.append({
-                        "role": "assistant",
-                        "content": msg.content
-                    })
-                else:
-                    # User messages: format as user role with username
-                    username = msg.user.username if msg.user else "Unknown"
-                    conversation_history.append({
-                        "role": "user",
-                        "content": f"{username}: {msg.content}"
-                    })
-            
-            # Initialize messages list with system message, conversation history, and current question
-            messages = [
-                {"role": "system", "content": system_message}
-            ]
-            # Add conversation history
-            messages.extend(conversation_history)
-            # Add current user question
-            messages.append({"role": "user", "content": question})
-            
-            # Debug logging before API call
-            print(f"DEBUG: User question: {question}")
-            print(f"DEBUG: Tools available: {len(tools)} tool(s)")
-            
-            # Call OpenAI API with function calling
-            response = openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                max_tokens=500,
-                temperature=0.7
-            )
-            
-            # Debug logging after API call
-            print(f"DEBUG: Tool calls: {response.choices[0].message.tool_calls}")
-            
-            # Handle tool calls if present
-            message = response.choices[0].message
-            if message.tool_calls:
-                # Execute web_search tool call
-                for tool_call in message.tool_calls:
-                    if tool_call.function.name == "web_search":
-                        function_args = json.loads(tool_call.function.arguments)
-                        search_query = function_args.get("query", "")
-                        max_results = function_args.get("max_results", 5)
-                        
-                        # Execute web search
-                        search_results = web_search(search_query, max_results)
-                        
-                        # Append tool result to messages
-                        messages.append({
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": tool_call.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": "web_search",
-                                        "arguments": tool_call.function.arguments
-                                    }
-                                }
-                            ]
-                        })
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": "web_search",
-                            "content": search_results
-                        })
-                
-                # Get final response with search results
-                final_response = openai_client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    max_tokens=500,
-                    temperature=0.7
-                )
-                ai_text = final_response.choices[0].message.content
-            else:
-                # No tool calls, use response directly
-                ai_text = message.content
-            
-            # Prepend username mention if available
-            if username:
-                ai_text = f"@{username}: {ai_text}"
-            
-            # Save AI bot response to database
-            ai_message = models.Message(
-                group_id=db_group_id,
-                user_id=None,  # AI messages have no user
-                content=ai_text,
-                is_AI=True
-            )
-            db.add(ai_message)
-            db.commit()
-        except Exception as e:
-            # Handle API errors gracefully
-            error_message = f"Error: Failed to get AI response. {str(e)}"
-            if username:
-                error_message = f"@{username}: {error_message}"
-            
             ai_message = models.Message(
                 group_id=db_group_id,
                 user_id=None,
@@ -510,6 +281,212 @@ Your goal: Help students with their Materials Science coursework through thoroug
             )
             db.add(ai_message)
             db.commit()
+            return
+
+        try:
+            # Ask the RAG pipeline for the most relevant chunks and its confidence
+            chunks, top_score = get_relevant_context(group_id, question)
+
+            # Fetch last 10 messages for conversation context
+            recent_messages = db.query(models.Message).filter(
+                models.Message.group_id == db_group_id
+            ).order_by(models.Message.timestamp.desc()).limit(10).all()
+
+            # Reverse to get chronological order (oldest first)
+            recent_messages.reverse()
+
+            # Build conversation history
+            conversation_history = []
+            for msg in recent_messages:
+                if msg.is_AI:
+                    conversation_history.append({
+                        "role": "assistant",
+                        "content": msg.content
+                    })
+                else:
+                    msg_sender = msg.user.username if msg.user else "Unknown"
+                    conversation_history.append({
+                        "role": "user",
+                        "content": f"{msg_sender}: {msg.content}"
+                    })
+
+            # The exact phrase Case 2 tells GPT-4o to say when the answer isn't
+            # in the document — pipeline looks for this string to trigger Case 3
+            REFUSAL_PHRASE = "I don't have that information in the uploaded documents"
+
+            sources = []
+            ai_text = ""
+
+            if top_score >= 0.0:
+                # --- Case 1: RAG path ---
+                # Top chunks scored well — answer directly from them
+                print(f"[RAG] Case 1 triggered — answering from document chunks")
+                context_parts = [
+                    f"[{chunk['filename']}]\n{chunk['text']}"
+                    for chunk in chunks
+                ]
+                context_str = "\n\n".join(context_parts)
+
+                system_message = (
+                    "Answer the question using ONLY the context passages provided below. "
+                    "Each passage is labelled with its source file in square brackets. "
+                    "Cite the source inline as [filename.pdf] when you use information from it. "
+                    "Do not use general knowledge. Do not make up information.\n\n"
+                    "Context:\n\n" + context_str
+                )
+
+                messages = [{"role": "system", "content": system_message}]
+                messages.extend(conversation_history)
+                messages.append({"role": "user", "content": question})
+
+                response = openai_client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=messages,
+                    max_tokens=500,
+                    temperature=0.7
+                )
+                ai_text = response.choices[0].message.content
+
+                sources = [
+                    {"type": "doc", "filename": c["filename"], "chunk_index": c["chunk_index"]}
+                    for c in chunks
+                ]
+
+            else:
+                # --- Case 2: Full document fallback ---
+                # Chunks scored too low — find the best-matching document and
+                # pass its full text so GPT-4o has a fair chance to answer
+                fallback_filename = get_top_document(chunks) if chunks else None
+                print(f"[RAG] Case 2 triggered — full document fallback: {fallback_filename}")
+                fallback_text = ""
+
+                if fallback_filename:
+                    doc_record = db.query(models.Document).filter(
+                        models.Document.group_id == group_id,
+                        models.Document.filename == fallback_filename
+                    ).first()
+                    if doc_record and Path(doc_record.stored_path).exists():
+                        try:
+                            reader = PdfReader(Path(doc_record.stored_path))
+                            fallback_text = "\n".join(
+                                page.extract_text() or "" for page in reader.pages
+                            )
+                        except Exception:
+                            fallback_text = ""
+
+                if fallback_text.strip():
+                    system_message = (
+                        f"Answer the question using ONLY the document provided below. "
+                        f"Cite the source inline as [{fallback_filename}] when you use information from it. "
+                        f"If the answer is genuinely not in the document, reply with exactly: "
+                        f"\"{REFUSAL_PHRASE}\"\n\n"
+                        f"Document:\n\n{fallback_text}"
+                    )
+
+                    messages = [{"role": "system", "content": system_message}]
+                    messages.extend(conversation_history)
+                    messages.append({"role": "user", "content": question})
+
+                    response = openai_client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=messages,
+                        max_tokens=500,
+                        temperature=0.7
+                    )
+                    ai_text = response.choices[0].message.content
+
+                    if REFUSAL_PHRASE not in ai_text:
+                        # GPT-4o found the answer in the full document
+                        sources = [{"type": "doc", "filename": fallback_filename}]
+                    else:
+                        # GPT-4o struck out — clear ai_text so we fall into Case 3
+                        ai_text = ""
+                        sources = []
+
+                if not ai_text:
+                    # --- Case 3: Tavily web search ---
+                    # Pipeline calls Tavily explicitly — results passed as plain
+                    # text context, not as a tool to GPT-4o
+                    print(f"[RAG] Case 3 triggered — Tavily web search fallback")
+                    tavily_api_key = os.getenv("TAVILY_API_KEY")
+                    web_results = []
+
+                    if tavily_api_key:
+                        try:
+                            tavily_client_obj = TavilyClient(api_key=tavily_api_key)
+                            tavily_response = tavily_client_obj.search(
+                                query=question, max_results=5
+                            )
+                            web_results = tavily_response.get("results", [])
+                        except Exception:
+                            web_results = []
+
+                    if not web_results:
+                        print(f"[RAG] All cases failed — returning final refusal")
+                        ai_text = "I don't have enough information to answer that question."
+                        sources = []
+                    else:
+                        context_parts = []
+                        for result in web_results:
+                            title = result.get("title", "")
+                            content = result.get("content", "")
+                            url = result.get("url", "")
+                            context_parts.append(f"Title: {title}\n{content}\nSource: {url}")
+                        context_str = "\n\n---\n\n".join(context_parts)
+
+                        system_message = (
+                            "The uploaded documents do not contain the answer to this question. "
+                            "Answer using the web search results provided below. "
+                            "Clearly state in your response that this information comes from "
+                            "a web search, not the uploaded documents. "
+                            "Include the source URLs in your response.\n\n"
+                            "Web search results:\n\n" + context_str
+                        )
+
+                        messages = [{"role": "system", "content": system_message}]
+                        messages.extend(conversation_history)
+                        messages.append({"role": "user", "content": question})
+
+                        response = openai_client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=messages,
+                            max_tokens=500,
+                            temperature=0.7
+                        )
+                        ai_text = response.choices[0].message.content
+
+                        sources = [
+                            {"type": "web", "url": r.get("url", "")}
+                            for r in web_results
+                            if r.get("url")
+                        ]
+
+            if username:
+                ai_text = f"@{username}: {ai_text}"
+
+            ai_message = models.Message(
+                group_id=db_group_id,
+                user_id=None,
+                content=ai_text,
+                is_AI=True,
+                sources=sources if sources else None
+            )
+            db.add(ai_message)
+            db.commit()
+
+        except Exception as e:
+            error_message = f"Error: Failed to get AI response. {str(e)}"
+            if username:
+                error_message = f"@{username}: {error_message}"
+            ai_message = models.Message(
+                group_id=db_group_id,
+                user_id=None,
+                content=error_message,
+                is_AI=True
+            )
+            db.add(ai_message)
+            db.commit()
+
     except Exception as e:
         db.rollback()
         print(f"Error saving AI reply: {str(e)}")
@@ -864,7 +841,19 @@ async def upload_document(
     db.add(document)
     db.commit()
     db.refresh(document)
-    
+
+    # Index the PDF text in ChromaDB so the RAG pipeline can search it.
+    # doc/docx files are stored on disk but can't be indexed — only PDFs.
+    if file_ext == '.pdf':
+        try:
+            reader = PdfReader(file_path)
+            pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            if pdf_text.strip():
+                index_document(group_id, file.filename, pdf_text)
+        except Exception as e:
+            # Don't block the upload if indexing fails — just log it
+            print(f"Warning: failed to index {file.filename} for RAG: {str(e)}")
+
     # Get file size
     file_size = os.path.getsize(file_path)
     

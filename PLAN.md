@@ -63,10 +63,20 @@ evaluation set before touching any AI code.
 Copy /backend to /mobile/backend. Confirm it runs standalone on port 8001
 with its own SQLite database.
 
-**Phase 3 — RAG Improvement**
-Add chunking, embeddings (text-embedding-3-small), ChromaDB vector store,
-cross-encoder reranker, and confidence thresholding to the mobile backend.
-Measure against the Phase 1 RAG eval set.
+**Phase 3 — RAG Improvement ✓ Complete**
+
+Original pipeline: full PDF text dumped into the system prompt, no chunking,
+no citations — 19/20 correct answers, 0/20 citations.
+
+Built a hybrid three-case pipeline in rag.py:
+- Case 1 (top reranker score >= 0.0): answer from top 10 reranked chunks, doc citations written to Message.sources
+- Case 2 (score < 0.0): full text of best-matching document passed to GPT-4o, doc citation on success
+- Case 3 (Case 2 returns refusal phrase): Tavily web search, results passed as context, URL citations
+
+Key numbers: chunk size 500 words, overlap 100, top-k 40, reranked to top 10, threshold 0.0.
+Citations now working post-RAG.
+
+**→ Current phase: Phase 4**
 
 **Phase 4 — Real-Time & Notifications**
 Add WebSocket support for real-time messaging. Implement @mention tagging
