@@ -42,6 +42,7 @@ class GroupMember(Base):
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
     role_in_group = Column(String, nullable=True)  # Optional role within the group
     joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_read_message_id = Column(Integer, nullable=True)  # highest message id seen by this user
 
     # Relationships
     user = relationship("User", back_populates="group_memberships")
@@ -96,4 +97,21 @@ class Summary(Base):
     # Relationships
     group = relationship("Group", back_populates="summaries")
     created_by = relationship("User")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    recipient_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=False)
+    group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
+    is_read = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Two FKs to the same table — foreign_keys= tells SQLAlchemy which is which
+    recipient = relationship("User", foreign_keys=[recipient_id])
+    sender = relationship("User", foreign_keys=[sender_id])
+    message = relationship("Message")
 

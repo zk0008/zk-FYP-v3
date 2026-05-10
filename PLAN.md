@@ -76,11 +76,37 @@ Built a hybrid three-case pipeline in rag.py:
 Key numbers: chunk size 500 words, overlap 100, top-k 40, reranked to top 10, threshold 0.0.
 Citations now working post-RAG.
 
-**→ Current phase: Phase 4**
+**Phase 4 — Real-Time & Notifications ✓ Complete**
 
-**Phase 4 — Real-Time & Notifications**
-Add WebSocket support for real-time messaging. Implement @mention tagging
-and in-app notifications on mobile backend and Expo frontend.
+Messages now go through WebSockets instead of HTTP polling. When a user
+sends a message the server broadcasts it to everyone connected to that
+group in real time. The old polling loop and optimistic-UI code in the
+web frontend were removed.
+
+@mention tagging works end-to-end: the server finds any @username in a
+message, creates a Notification row, and pushes it to that user
+immediately via WebSocket. If they're offline the notification is queued
+and delivered on their next connection. Tagged messages are highlighted
+in yellow in the chat.
+
+The sidebar shows two separate badges per group — a blue one for unread
+messages and an orange @N one for unread tag notifications. Both hide
+when you're already in that group. Unread position is tracked using
+GroupMember.last_read_message_id and cleared when you open a group.
+The mobile backend gained four new REST endpoints: GET /notifications,
+POST /notifications/{id}/read, GET /groups/{id}/unread, and
+POST /groups/{id}/read.
+
+Known gap: the cross-group badge only updates in real time if the user
+is connected to a different group's WebSocket. If they're not connected
+at all, the badge won't tick up until the next page load. Fixing this
+properly would need a separate notification channel or polling, deferred
+for now.
+
+Note: /frontend was intentionally modified for Phase 4 WebSocket
+integration. All existing web features remain intact.
+
+**→ Current phase: Phase 5**
 
 **Phase 5 — Summary Improvements**
 Follow the existing web implementation for group summaries and student

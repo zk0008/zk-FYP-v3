@@ -3,12 +3,13 @@ import re
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import OpenAI
 from pypdf import PdfReader
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from tavily import TavilyClient
 
@@ -17,6 +18,7 @@ from database import Base, SessionLocal, get_db, engine
 import models  # Import models so Alembic can see them
 from auth import hash_password, decode_token, verify_password, create_access_token
 from rag import index_document, get_relevant_context, get_top_document
+from websocket_manager import manager
 
 app = FastAPI(title="Group Chat Prototype")
 
@@ -163,6 +165,14 @@ async def startup_event():
     """Run initialization tasks when the app starts."""
     # Create all database tables
     Base.metadata.create_all(bind=engine)
+    # Add any columns that were added after the DB was first created.
+    # SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so wrap in try/except.
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE group_members ADD COLUMN last_read_message_id INTEGER"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists — safe to ignore
     # Ensure uploads directory exists
     PDF_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     # Only initialize demo data if SKIP_DEMO_DATA is not set (i.e., in local development)
@@ -490,6 +500,182 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
     except Exception as e:
         db.rollback()
         print(f"Error saving AI reply: {str(e)}")
+    finally:
+        db.close()
+
+
+@app.websocket("/ws/groups/{group_id}")
+async def websocket_endpoint(websocket: WebSocket, group_id: str):
+    # Token comes in as a query param since WS connections can't use headers
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4008)
+        return
+
+    payload = decode_token(token)
+    if not payload:
+        await websocket.close(code=4008)
+        return
+
+    username = payload.get("sub") or payload.get("username")
+    if not username:
+        await websocket.close(code=4008)
+        return
+
+    db = SessionLocal()
+    try:
+        current_user = db.query(models.User).filter(models.User.username == username).first()
+        if not current_user:
+            await websocket.close(code=4008)
+            return
+
+        await websocket.accept()
+        manager.connect(websocket, group_id, current_user.id)
+
+        # Push any unread notifications that arrived while the user was offline
+        pending = db.query(models.Notification, models.Group).join(
+            models.Group, models.Group.id == models.Notification.group_id
+        ).filter(
+            models.Notification.recipient_id == current_user.id,
+            models.Notification.is_read == False
+        ).all()
+        for notif, grp in pending:
+            await manager.send_to_user(current_user.id, {
+                "type": "notification",
+                "id": notif.id,
+                "sender_id": notif.sender_id,
+                "message_id": notif.message_id,
+                "group_id": notif.group_id,
+                "group_string_id": grp.string_id,
+                "created_at": notif.created_at.isoformat()
+            })
+
+        # Look up the integer group PK once — needed for DB writes
+        db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+
+        try:
+            while True:
+                data = await websocket.receive_json()
+                content = data.get("content", "").strip()
+                if not content:
+                    continue
+
+                # Save the message
+                new_message = models.Message(
+                    group_id=db_group.id,
+                    user_id=current_user.id,
+                    content=content,
+                    is_AI=False
+                )
+                db.add(new_message)
+                db.commit()
+                db.refresh(new_message)
+
+                # Broadcast the message to everyone in the group
+                await manager.broadcast_to_group(group_id, {
+                    "type": "message",
+                    "id": new_message.id,
+                    "sender": current_user.username,
+                    "text": content,
+                    "is_bot": False,
+                    "group_string_id": group_id
+                })
+
+                # Nudge members who are connected to a *different* group's WS
+                # so their badge counter updates without a full page refresh
+                group_members = db.query(models.GroupMember).filter(
+                    models.GroupMember.group_id == db_group.id
+                ).all()
+                for member in group_members:
+                    # sender already got the broadcast above
+                    if member.user_id == current_user.id:
+                        continue
+                    # already got the broadcast because they're watching this group
+                    if member.user_id in manager.active_connections.get(group_id, {}):
+                        continue
+                    await manager.send_to_user(member.user_id, {
+                        "type": "message",
+                        "id": new_message.id,
+                        "sender": current_user.username,
+                        "text": content,
+                        "is_bot": False,
+                        "group_string_id": group_id
+                    })
+
+                # Go through @mentions and notify the tagged users
+                mentions = re.findall(r"@(\w+)", content)
+                for mentioned_username in mentions:
+                    # skip @ai — that's handled separately below
+                    if mentioned_username.lower() == "ai":
+                        continue
+                    # skip self-mentions
+                    if mentioned_username == current_user.username:
+                        continue
+                    # only notify if they're actually in this group
+                    mentioned_user = db.query(models.User).join(
+                        models.GroupMember,
+                        models.GroupMember.user_id == models.User.id
+                    ).filter(
+                        models.User.username == mentioned_username,
+                        models.GroupMember.group_id == db_group.id
+                    ).first()
+                    if not mentioned_user:
+                        continue
+
+                    notif = models.Notification(
+                        recipient_id=mentioned_user.id,
+                        sender_id=current_user.id,
+                        message_id=new_message.id,
+                        group_id=db_group.id
+                    )
+                    db.add(notif)
+                    db.commit()
+                    db.refresh(notif)
+
+                    await manager.send_to_user(mentioned_user.id, {
+                        "type": "notification",
+                        "id": notif.id,
+                        "sender_id": current_user.id,
+                        "message_id": new_message.id,
+                        "group_id": db_group.id,
+                        "group_string_id": db_group.string_id,
+                        "created_at": notif.created_at.isoformat()
+                    })
+
+                # If @ai is in the message, run the RAG pipeline and broadcast the reply
+                if "@ai" in content.lower():
+                    question = re.sub(r"@ai\s*", "", content, flags=re.IGNORECASE).strip()
+                    if question:
+                        # generate_ai_reply is blocking (OpenAI call) — run it in a
+                        # thread so the event loop stays free for other connections
+                        import asyncio
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(
+                            None,
+                            generate_ai_reply,
+                            group_id,
+                            question,
+                            db_group.id,
+                            current_user.username
+                        )
+                        # Fetch the AI message that was just written and broadcast it
+                        ai_message = db.query(models.Message).filter(
+                            models.Message.group_id == db_group.id,
+                            models.Message.is_AI == True
+                        ).order_by(models.Message.timestamp.desc()).first()
+                        if ai_message:
+                            await manager.broadcast_to_group(group_id, {
+                                "type": "message",
+                                "id": ai_message.id,
+                                "sender": "AI Bot",
+                                "text": ai_message.content,
+                                "is_bot": True,
+                                "group_string_id": group_id
+                            })
+
+        except WebSocketDisconnect:
+            manager.disconnect(group_id, current_user.id)
+
     finally:
         db.close()
 
@@ -1226,3 +1412,127 @@ def update_student_summary(
         "group_id": group_id,
         "summary_text": db_group.student_summary or ""
     }
+
+
+@app.get("/notifications")
+def get_notifications(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    results = db.query(models.Notification, models.Group).join(
+        models.Group, models.Group.id == models.Notification.group_id
+    ).filter(
+        models.Notification.recipient_id == current_user.id,
+        models.Notification.is_read == False
+    ).all()
+    return [
+        {
+            "id": n.id,
+            "sender_id": n.sender_id,
+            "message_id": n.message_id,
+            "group_id": n.group_id,
+            "group_string_id": g.string_id,
+            "created_at": n.created_at.isoformat()
+        }
+        for n, g in results
+    ]
+
+
+@app.post("/notifications/{notification_id}/read")
+def mark_notification_read(
+    notification_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    notif = db.query(models.Notification).filter(
+        models.Notification.id == notification_id
+    ).first()
+    # 404 if missing or belongs to a different user
+    if not notif or notif.recipient_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    notif.is_read = True
+    db.commit()
+    return {"status": "ok"}
+
+
+@app.get("/groups/{group_id}/unread")
+def get_group_unread(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    membership = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == current_user.id,
+        models.GroupMember.group_id == db_group.id
+    ).first()
+
+    # coordinators have no membership row — treat everything as read for them
+    if not membership:
+        return {"unread_messages": 0, "unread_tags": 0}
+
+    last_read_id = membership.last_read_message_id
+
+    if last_read_id is None:
+        # never read anything — every message in this group is unread
+        unread_messages = db.query(models.Message).filter(
+            models.Message.group_id == db_group.id
+        ).count()
+    else:
+        unread_messages = db.query(models.Message).filter(
+            models.Message.group_id == db_group.id,
+            models.Message.id > last_read_id
+        ).count()
+
+    unread_tags = db.query(models.Notification).filter(
+        models.Notification.recipient_id == current_user.id,
+        models.Notification.group_id == db_group.id,
+        models.Notification.is_read == False
+    ).count()
+
+    return {"unread_messages": unread_messages, "unread_tags": unread_tags}
+
+
+@app.post("/groups/{group_id}/read")
+def mark_group_read(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    # find the latest message so we know what "read up to" means
+    latest = db.query(models.Message).filter(
+        models.Message.group_id == db_group.id
+    ).order_by(models.Message.id.desc()).first()
+
+    if not latest:
+        return {"status": "ok"}
+
+    membership = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == current_user.id,
+        models.GroupMember.group_id == db_group.id
+    ).first()
+
+    if membership:
+        membership.last_read_message_id = latest.id
+        db.commit()
+
+    # also clear any tag notifications for this user in this group
+    db.query(models.Notification).filter(
+        models.Notification.recipient_id == current_user.id,
+        models.Notification.group_id == db_group.id,
+        models.Notification.is_read == False
+    ).update({"is_read": True})
+    db.commit()
+
+    return {"status": "ok"}

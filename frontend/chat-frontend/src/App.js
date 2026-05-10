@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useRef } from "react";
 import "./App.css";
 
-const API_BASE = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
+const API_BASE = process.env.REACT_APP_API_URL || "http://127.0.0.1:8001";
+// ws:// for http, wss:// for https — derived so it always matches the REST host
+const WS_BASE = API_BASE.replace(/^http/, "ws");
 
 function formatPlainText(text) {
     return text
@@ -39,12 +41,15 @@ function App() {
     const [loadingStudentSummary, setLoadingStudentSummary] = useState(false);
     const [savingStudentSummary, setSavingStudentSummary] = useState(false);
     const [studentSummaryText, setStudentSummaryText] = useState("");
+    const [unreadByGroup, setUnreadByGroup] = useState({});
+    const [firstUnreadMessageId, setFirstUnreadMessageId] = useState(null);
+    const [isAtBottom, setIsAtBottom] = useState(true);
     const pollingIntervalRef = useRef(null);
     const pollingTimeoutRef = useRef(null);
     const messagesEndRef = useRef(null);
     const messagesContainerRef = useRef(null);
-    const messagePollingIntervalRef = useRef(null);
     const shouldForceScrollToBottomRef = useRef(false);
+    const wsRef = useRef(null);
 
     // Helper function for authenticated API calls
     const authFetch = (url, options = {}) => {
@@ -176,80 +181,136 @@ function App() {
     useEffect(() => {
         if (!selectedGroup || !token) {
             setMessages([]);
-            // Clear any existing polling interval
-            if (messagePollingIntervalRef.current) {
-                clearInterval(messagePollingIntervalRef.current);
-                messagePollingIntervalRef.current = null;
-            }
+            setFirstUnreadMessageId(null);
             shouldForceScrollToBottomRef.current = false;
+            if (wsRef.current) {
+                wsRef.current.close();
+                wsRef.current = null;
+            }
             return;
         }
 
-        // Function to load messages (defined inside useEffect to avoid stale closures)
-        const loadMessages = () => {
-            if (!selectedGroup || !token) {
-                return;
-            }
-            authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`)
-                .then((res) => res.json())
-                .then((data) => {
-                    setMessages(data);
-                    setLoadingMessages(false);
-                })
-                .catch(() => {
+        setLoadingMessages(true);
+        let cancelled = false;
+
+        // Load message history and this group's unread position in parallel
+        Promise.all([
+            authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`).then((r) => r.json()),
+            authFetch(`${API_BASE}/groups/${selectedGroup.id}/unread`).then((r) => r.json()),
+        ])
+            .then(([msgs, unreadData]) => {
+                if (cancelled) return;
+                setMessages(msgs);
+                setLoadingMessages(false);
+
+                if (unreadData.unread_messages > 0 && msgs.length > 0) {
+                    // first unread is at index (total - unread_count) in chronological order
+                    const idx = Math.max(0, msgs.length - unreadData.unread_messages);
+                    setFirstUnreadMessageId(msgs[idx]?.id || null);
+                    shouldForceScrollToBottomRef.current = false;
+                } else {
+                    setFirstUnreadMessageId(null);
+                    shouldForceScrollToBottomRef.current = true;
+                }
+
+                // mark this group read now that the user is looking at it
+                authFetch(`${API_BASE}/groups/${selectedGroup.id}/read`, { method: "POST" }).catch(() => {});
+                // clear this group's badge in local state
+                setUnreadByGroup((prev) => ({
+                    ...prev,
+                    [selectedGroup.id]: { unread_messages: 0, unread_tags: 0 },
+                }));
+            })
+            .catch(() => {
+                if (!cancelled) {
                     setError("Failed to load messages");
                     setLoadingMessages(false);
+                }
+            });
+
+        const ws = new WebSocket(
+            `${WS_BASE}/ws/groups/${selectedGroup.id}?token=${token}`
+        );
+        wsRef.current = ws;
+
+        ws.onmessage = (event) => {
+            const payload = JSON.parse(event.data);
+            if (payload.type === "message") {
+                setMessages((prev) => {
+                    // guard against duplicates if the same message arrives twice
+                    if (prev.some((m) => m.id === payload.id)) return prev;
+                    return [...prev, {
+                        id: payload.id,
+                        sender: payload.sender,
+                        text: payload.text,
+                        is_bot: payload.is_bot,
+                    }];
                 });
+                // only badge groups the user isn't currently looking at
+                if (payload.group_string_id && payload.group_string_id !== selectedGroup.id) {
+                    setUnreadByGroup((prev) => ({
+                        ...prev,
+                        [payload.group_string_id]: {
+                            unread_messages: (prev[payload.group_string_id]?.unread_messages || 0) + 1,
+                            unread_tags: prev[payload.group_string_id]?.unread_tags || 0,
+                        },
+                    }));
+                }
+            } else if (payload.type === "notification") {
+                if (payload.group_string_id && payload.group_string_id !== selectedGroup.id) {
+                    setUnreadByGroup((prev) => ({
+                        ...prev,
+                        [payload.group_string_id]: {
+                            unread_messages: prev[payload.group_string_id]?.unread_messages || 0,
+                            unread_tags: (prev[payload.group_string_id]?.unread_tags || 0) + 1,
+                        },
+                    }));
+                }
+            }
         };
 
-        // Load messages immediately
-        setLoadingMessages(true);
-        // For a freshly selected group, always scroll to bottom on the first load
-        shouldForceScrollToBottomRef.current = true;
-        loadMessages();
+        ws.onerror = () => {
+            setError("WebSocket connection error");
+        };
 
-        // Set up polling to load messages every 1 second
-        messagePollingIntervalRef.current = setInterval(() => {
-            loadMessages();
-        }, 1000);
-
-        // Cleanup function to clear interval when component unmounts or dependencies change
         return () => {
-            if (messagePollingIntervalRef.current) {
-                clearInterval(messagePollingIntervalRef.current);
-                messagePollingIntervalRef.current = null;
-            }
+            cancelled = true;
+            ws.close();
+            wsRef.current = null;
         };
     }, [selectedGroup, token]);
 
-    // Scroll to bottom when messages change (only if user is near bottom)
+    // Scroll to first unread message on group open, or to bottom if no unread
     useEffect(() => {
         if (messages.length === 0) return;
 
         setTimeout(() => {
-            const container = messagesContainerRef.current;
-            const endElement = messagesEndRef.current;
-
-            if (!container || !endElement) return;
-
-            const distanceFromBottom =
-                container.scrollHeight -
-                container.scrollTop -
-                container.clientHeight;
-
-            if (
-                shouldForceScrollToBottomRef.current ||
-                distanceFromBottom < 20
-            ) {
-                endElement.scrollIntoView({
-                    behavior: shouldForceScrollToBottomRef.current
-                        ? "auto"
-                        : "smooth",
-                });
+            if (firstUnreadMessageId) {
+                // jump to the first message they haven't seen, then clear so
+                // new incoming messages use the normal isAtBottom scroll logic
+                document.getElementById(`message-${firstUnreadMessageId}`)
+                    ?.scrollIntoView({ behavior: "auto" });
+                setFirstUnreadMessageId(null);
                 shouldForceScrollToBottomRef.current = false;
+            } else {
+                const container = messagesContainerRef.current;
+                const endElement = messagesEndRef.current;
+                if (!container || !endElement) return;
+
+                const distanceFromBottom =
+                    container.scrollHeight -
+                    container.scrollTop -
+                    container.clientHeight;
+
+                if (shouldForceScrollToBottomRef.current || distanceFromBottom < 20 || isAtBottom) {
+                    endElement.scrollIntoView({
+                        behavior: shouldForceScrollToBottomRef.current ? "auto" : "smooth",
+                    });
+                    shouldForceScrollToBottomRef.current = false;
+                }
             }
         }, 50);
-    }, [messages]);
+    }, [messages, firstUnreadMessageId, isAtBottom]);
 
     // Cleanup polling intervals on unmount or when group changes
     useEffect(() => {
@@ -264,6 +325,26 @@ function App() {
             }
         };
     }, [selectedGroup]);
+
+    // Populate sidebar badges for all groups when the group list first loads
+    useEffect(() => {
+        if (!isAuthenticated || !token || groups.length === 0) return;
+
+        groups.forEach((group) => {
+            authFetch(`${API_BASE}/groups/${group.id}/unread`)
+                .then((r) => r.json())
+                .then((data) => {
+                    setUnreadByGroup((prev) => ({
+                        ...prev,
+                        [group.id]: {
+                            unread_messages: data.unread_messages,
+                            unread_tags: data.unread_tags,
+                        },
+                    }));
+                })
+                .catch(() => {});
+        });
+    }, [isAuthenticated, token, groups]);
 
     // Fetch documents when Documents tab is active and group is selected
     useEffect(() => {
@@ -328,130 +409,25 @@ function App() {
 
     const handleSelectGroup = (group) => {
         setSelectedGroup(group);
-        setActiveTab("Chats"); // Reset to Chats tab when selecting a group
+        setActiveTab("Chats");
         setError("");
+        // unread fetch, firstUnreadMessageId, mark-read, and badge clear
+        // all happen in the WS useEffect after messages are loaded
     };
 
     const handleSubmit = (event) => {
         event.preventDefault();
-        if (!selectedGroup || !newMessage.trim()) {
+        if (!selectedGroup || !newMessage.trim() || !wsRef.current) {
             return;
         }
-
         const messageText = newMessage.trim();
-        const isAiMessage = messageText.startsWith("@ai");
-
-        // Optimistic UI: Add message immediately to local state
-        const tempId = Date.now(); // Temporary ID for optimistic message
-        const optimisticMessage = {
-            id: tempId,
-            sender: "Supervisor",
-            text: messageText,
-            is_bot: false,
-        };
-        setMessages((prev) => [...prev, optimisticMessage]);
         setNewMessage("");
-
-        // Send POST request
-        authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                sender: user?.username || "User",
-                text: messageText,
-            }),
-        })
-            .then((res) => res.json())
-            .then((createdMessage) => {
-                // Replace optimistic message with real one from server
-                setMessages((prev) =>
-                    prev.map((msg) =>
-                        msg.id === tempId ? createdMessage : msg
-                    )
-                );
-
-                // If it's an AI message, start polling for the AI response
-                if (isAiMessage) {
-                    startPollingForAiResponse(createdMessage.id);
-                }
-            })
-            .catch(() => {
-                // On error, remove optimistic message and show error
-                setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
-                setError("Failed to send message");
-            });
+        // force scroll to bottom on the next effect tick so we land at the new message
+        shouldForceScrollToBottomRef.current = true;
+        // send via WebSocket — the server broadcasts it back so no optimistic UI needed
+        wsRef.current.send(JSON.stringify({ content: messageText }));
     };
 
-    const startPollingForAiResponse = (lastMessageId) => {
-        // Clear any existing polling
-        if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-        }
-        if (pollingTimeoutRef.current) {
-            clearTimeout(pollingTimeoutRef.current);
-        }
-
-        let pollCount = 0;
-        const maxPolls = 10; // Poll for 10 seconds (10 polls * 1 second)
-
-        // Poll every 1 second
-        pollingIntervalRef.current = setInterval(() => {
-            pollCount++;
-            authFetch(`${API_BASE}/groups/${selectedGroup.id}/messages`)
-                .then((res) => res.json())
-                .then((allMessages) => {
-                    // Check if there's a new AI bot message after our last message
-                    const lastMessageIndex = allMessages.findIndex(
-                        (msg) => msg.id === lastMessageId
-                    );
-
-                    if (
-                        lastMessageIndex !== -1 &&
-                        lastMessageIndex < allMessages.length - 1
-                    ) {
-                        // There's a message after ours - check if it's from AI Bot
-                        const nextMessage = allMessages[lastMessageIndex + 1];
-                        if (
-                            nextMessage.sender === "AI Bot" &&
-                            nextMessage.is_bot
-                        ) {
-                            // AI response arrived! Update messages and stop polling
-                            setMessages(allMessages);
-                            stopPolling();
-                            return;
-                        }
-                    }
-
-                    // Update messages anyway (in case of other changes)
-                    setMessages(allMessages);
-
-                    // Stop polling after max attempts
-                    if (pollCount >= maxPolls) {
-                        stopPolling();
-                    }
-                })
-                .catch(() => {
-                    // On error, just stop polling
-                    stopPolling();
-                });
-        }, 1000); // Poll every 1 second
-
-        // Safety timeout: stop polling after 10 seconds regardless
-        pollingTimeoutRef.current = setTimeout(() => {
-            stopPolling();
-        }, 10000);
-    };
-
-    const stopPolling = () => {
-        if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-            pollingIntervalRef.current = null;
-        }
-        if (pollingTimeoutRef.current) {
-            clearTimeout(pollingTimeoutRef.current);
-            pollingTimeoutRef.current = null;
-        }
-    };
 
     const handleFileSelect = (file) => {
         if (!file || !selectedGroup) {
@@ -879,6 +855,16 @@ function App() {
                                     {group.name.split(" ").pop()}
                                 </span>
                                 <span>{group.name}</span>
+                                {selectedGroup?.id !== group.id && (unreadByGroup[group.id]?.unread_messages || 0) > 0 && (
+                                    <span style={{ marginLeft: "6px", background: "#1976d2", color: "white", borderRadius: "10px", padding: "4px 8px", fontSize: "11px" }}>
+                                        {unreadByGroup[group.id].unread_messages}
+                                    </span>
+                                )}
+                                {selectedGroup?.id !== group.id && (unreadByGroup[group.id]?.unread_tags || 0) > 0 && (
+                                    <span style={{ marginLeft: "4px", background: "#e65100", color: "white", borderRadius: "10px", padding: "4px 8px", fontSize: "11px" }}>
+                                        @{unreadByGroup[group.id].unread_tags}
+                                    </span>
+                                )}
                             </button>
                         ))}
                     </div>
@@ -925,10 +911,20 @@ function App() {
                     )}
                     {activeTab === "Chats" ? (
                         <>
-                            <div
-                                className="messages"
-                                ref={messagesContainerRef}
-                            >
+                            <div style={{ position: "relative", flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+                                <div
+                                    className="messages"
+                                    ref={messagesContainerRef}
+                                    onScroll={() => {
+                                        const container = messagesContainerRef.current;
+                                        if (!container) return;
+                                        const dist =
+                                            container.scrollHeight -
+                                            container.scrollTop -
+                                            container.clientHeight;
+                                        setIsAtBottom(dist < 20);
+                                    }}
+                                >
                                 {error && <p className="error-text">{error}</p>}
                                 {!selectedGroup && !error && (
                                     <p className="placeholder">
@@ -945,11 +941,19 @@ function App() {
                                         {messages.map((msg) => (
                                             <div
                                                 key={msg.id}
+                                                id={`message-${msg.id}`}
                                                 className={`message-card ${
                                                     msg.is_bot
                                                         ? "ai-message"
                                                         : ""
                                                 }`}
+                                                style={
+                                                    !msg.is_bot &&
+                                                    user?.username &&
+                                                    msg.text?.includes(`@${user.username}`)
+                                                        ? { backgroundColor: "#fffacd" }
+                                                        : {}
+                                                }
                                             >
                                                 <span
                                                     className={`message-sender ${
@@ -981,6 +985,35 @@ function App() {
                                         )}
                                         <div ref={messagesEndRef} />
                                     </div>
+                                )}
+                                </div>
+                                {!isAtBottom && (
+                                    <button
+                                        onClick={() => {
+                                            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+                                            setIsAtBottom(true);
+                                        }}
+                                        style={{
+                                            position: "absolute",
+                                            bottom: "12px",
+                                            right: "12px",
+                                            zIndex: 10,
+                                            borderRadius: "50%",
+                                            width: "36px",
+                                            height: "36px",
+                                            border: "none",
+                                            background: "#1976d2",
+                                            color: "white",
+                                            fontSize: "18px",
+                                            cursor: "pointer",
+                                            boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                        }}
+                                    >
+                                        ↓
+                                    </button>
                                 )}
                             </div>
                             <form
