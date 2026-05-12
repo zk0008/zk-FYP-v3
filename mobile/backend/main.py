@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import asyncio
+import requests as http_requests
 from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query, WebSocket, WebSocketDisconnect
@@ -41,6 +43,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
+
+def send_push_notifications(tokens: list[str], title: str, body: str, data: dict):
+    """Fire-and-forget push to the Expo push service. Failures are non-critical."""
+    messages = [
+        {"to": t, "title": title, "body": body, "data": data, "sound": "default"}
+        for t in tokens
+        if t.startswith("ExponentPushToken[")
+    ]
+    if not messages:
+        return
+    try:
+        http_requests.post(EXPO_PUSH_URL, json=messages, timeout=5)
+    except Exception:
+        pass  # push failures should never break the WS flow
 
 
 def init_demo_data():
@@ -586,12 +606,13 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                 group_members = db.query(models.GroupMember).filter(
                     models.GroupMember.group_id == db_group.id
                 ).all()
+                watching = manager.active_user_ids_in_group(group_id)
                 for member in group_members:
                     # sender already got the broadcast above
                     if member.user_id == current_user.id:
                         continue
                     # already got the broadcast because they're watching this group
-                    if member.user_id in manager.active_connections.get(group_id, {}):
+                    if member.user_id in watching:
                         continue
                     await manager.send_to_user(member.user_id, {
                         "type": "message",
@@ -601,6 +622,24 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                         "is_bot": False,
                         "group_string_id": group_id
                     })
+                    # this user has no live WebSocket — send a push notification
+                    # so they see a banner even if the app is backgrounded/closed
+                    offline_tokens = [
+                        pt.token for pt in db.query(models.PushToken).filter(
+                            models.PushToken.user_id == member.user_id
+                        ).all()
+                    ]
+                    if offline_tokens:
+                        # run in a thread — requests.post is blocking and would
+                        # stall the event loop (and all other WS connections) if awaited directly
+                        asyncio.get_running_loop().run_in_executor(
+                            None,
+                            send_push_notifications,
+                            offline_tokens,
+                            f"{db_group.name}",
+                            f"{current_user.username}: {content[:100]}",
+                            {"groupId": group_id, "groupName": db_group.name},
+                        )
 
                 # Go through @mentions and notify the tagged users
                 mentions = re.findall(r"@(\w+)", content)
@@ -648,8 +687,7 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                     if question:
                         # generate_ai_reply is blocking (OpenAI call) — run it in a
                         # thread so the event loop stays free for other connections
-                        import asyncio
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         await loop.run_in_executor(
                             None,
                             generate_ai_reply,
@@ -674,7 +712,7 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                             })
 
         except WebSocketDisconnect:
-            manager.disconnect(group_id, current_user.id)
+            manager.disconnect(group_id, current_user.id, websocket)
 
     finally:
         db.close()
@@ -751,6 +789,30 @@ def get_current_user_info(current_user: models.User = Depends(get_current_user))
         "username": current_user.username,
         "role": current_user.role
     }
+
+
+class PushTokenRequest(BaseModel):
+    token: str
+
+
+@app.post("/push-token")
+def register_push_token(
+    body: PushTokenRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Register or refresh an Expo push token for the current user."""
+    existing = db.query(models.PushToken).filter(
+        models.PushToken.token == body.token
+    ).first()
+    if not existing:
+        db.add(models.PushToken(user_id=current_user.id, token=body.token))
+        db.commit()
+    elif existing.user_id != current_user.id:
+        # token transferred to a new user (device re-login) — reassign it
+        existing.user_id = current_user.id
+        db.commit()
+    return {"ok": True}
 
 
 @app.get("/my-groups")

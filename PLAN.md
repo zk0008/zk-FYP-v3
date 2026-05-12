@@ -106,15 +106,106 @@ for now.
 Note: /frontend was intentionally modified for Phase 4 WebSocket
 integration. All existing web features remain intact.
 
-**→ Current phase: Phase 5**
+**Phase 5 — Mobile Frontend (Expo) — In Progress**
 
-**Phase 5 — Summary Improvements**
+Build the Expo React Native app for iOS and Android. Every screen from
+the web frontend must be reproduced in the mobile app.
+
+Theme: simple, natural colours with rounded corners, broadly consistent
+with the existing web frontend. Target both iOS and Android via Expo.
+
+Steps 1–4 complete. Step 5 is next.
+
+**Step 1 — Project scaffold ✓**
+Expo Router project created under /mobile/app. File-system routing with
+a root Stack navigator. AuthProvider wraps the tree via React Context.
+AsyncStorage persists JWT token and user across sessions. Auto-redirect
+to login if unauthenticated.
+
+Screens: index (redirect), login, groups (root of app after auth).
+Hooks: useAuth (token, user, login, logout), useGroups (fetch + badge counts).
+
+**Step 2 — Groups screen ✓**
+Group list with blue (unread messages) and orange (@mention) badge counts
+per group. useFocusEffect refreshes on return from chat; 15 s polling
+keeps badges current while the screen is active. 401 auto-logout and
+retry on error. Stable FlatList separator, SafeAreaView from
+react-native-safe-area-context.
+
+**Step 3 — Chat shell & navigation ✓**
+[groupId] folder creates a nested Tabs navigator (Chats, Documents,
+AI Overview, Student) inside the root Stack. Stack header shows group
+name with an explicit ‹ Groups back button (router.navigate avoids
+history-pop issues in the nested Stack). tabBarHideOnKeyboard: true on
+the Chats tab so the keyboard never covers the input bar.
+
+**Step 4 — Chats tab ✓**
+Real-time chat screen backed by WebSocket with full reconnect logic.
+
+ScrollView (not FlatList) renders all messages at once so scrollToEnd
+and scrollTo always land at the exact position — matches how the web
+frontend works. On load, messages + unread count are fetched in parallel;
+unread count is captured before POST /read resets it. Each message View
+captures its Y position via onLayout. After a 50 ms settle, the screen
+jumps to the first unread message (by ID, same formula as the web) or
+to the latest message if no unread. Hidden behind a spinner overlay until
+positioned — no flash-to-top.
+
+MessageBubble: own messages right-aligned blue, bot messages left purple,
+others left white, @mentioned messages yellow. Wrapped in React.memo.
+
+Keyboard: KeyboardAvoidingView with behavior="padding" on iOS and
+behavior="height" on Android, keyboardVerticalOffset=useHeaderHeight()
+so the input bar always appears flush above the keyboard. Keyboard open
+event scrolls to the latest message. keyboardShouldPersistTaps="handled"
+on the ScrollView.
+
+WebSocket hook: exponential backoff reconnect (2 s → 4 s → 8 s → 30 s
+cap, no hard attempt limit), AppState listener reconnects when app
+returns to foreground, guard against stacking duplicate connections.
+
+Backend fixes shipped alongside Step 4:
+- NullPool on SQLite engine (no more pool exhaustion from long-lived WS sessions)
+- ConnectionManager stores list[WebSocket] per user per group so the same
+  account on two devices (simulator + physical) both receive broadcasts
+- Offline cross-group nudge uses active_user_ids_in_group() helper
+
+**Push notifications ✓ (shipped with Step 4)**
+System push notifications via Expo Push Notification Service → APNs.
+
+Backend: PushToken model and POST /push-token endpoint. When a message
+is sent, members with no live WebSocket receive an Expo push notification
+(title = group name, body = sender: first 100 chars). HTTP call runs in
+a thread executor so it never blocks the async event loop.
+
+Frontend: usePushNotifications hook requests permission, obtains the
+Expo push token via getExpoPushTokenAsync (projectId from EAS config),
+registers it with the backend on login. Notification handler configured
+for foreground banners + sound. Response listener navigates to the
+correct group on notification tap, including cold-start via
+getLastNotificationResponseAsync.
+
+EAS project configured (projectId in app.json). iOS Simulator cannot
+receive push notifications — Apple platform restriction, no workaround.
+
+**→ Current: Step 5**
+
+**Step 5 — Documents tab**
+- Upload PDFs (file picker → multipart POST)
+- List uploaded documents with filename, uploader, size, date
+- View (open in system viewer) and delete
+
+**Step 6 — AI Overview tab**
+- Display latest weekly summary
+- Refresh button (POST to regenerate)
+
+**Step 7 — Student Overview tab**
+- View and edit collaborative student summary text
+- Save button (POST to persist)
+
+**Phase 6 — Summary Improvements**
 Follow the existing web implementation for group summaries and student
-contribution input. Revisit scope after Phase 4 is complete.
-
-**Phase 6 — Mobile Frontend**
-Build the Expo app: all screens (login, group list, chat, documents,
-summary). Connect to mobile backend.
+contribution input. Revisit scope after Phase 5 is complete.
 
 **Phase 7 — Testing & Wrap-Up**
 End-to-end testing, RAG eval re-run, document results.

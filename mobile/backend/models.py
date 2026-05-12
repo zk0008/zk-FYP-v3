@@ -99,6 +99,18 @@ class Summary(Base):
     created_by = relationship("User")
 
 
+class PushToken(Base):
+    __tablename__ = "push_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # Expo push token — unique so the same token isn't stored twice
+    token = Column(String, unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User")
+
+
 class Notification(Base):
     __tablename__ = "notifications"
 
