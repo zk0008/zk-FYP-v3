@@ -13,7 +13,7 @@ zk-FYP-v3/
 ├── frontend/         Web frontend — never modified (reference only)
 └── mobile/
     ├── backend/      Mobile backend — copy of web backend, extended here
-    └── frontend/     Expo (React Native) mobile app
+    └── app/          Expo (React Native) mobile app
 ```
 
 ---
@@ -55,13 +55,14 @@ zk-FYP-v3/
 
 ## Development Phases
 
-**Phase 1 — Setup & Baseline**
-Verify the web app runs locally and all existing features work. Write a RAG
-evaluation set before touching any AI code.
+**Phase 1 — Setup & Baseline ✓ Complete**
+Web app verified locally and all 26 features confirmed working. RAG evaluation
+set created with 20 questions; baseline recorded as 19/20 correct and 0/20
+source citations.
 
-**Phase 2 — Mobile Backend Setup**
-Copy /backend to /mobile/backend. Confirm it runs standalone on port 8001
-with its own SQLite database.
+**Phase 2 — Mobile Backend Setup ✓ Complete**
+Mobile backend copied to /mobile/backend and confirmed running standalone on
+port 8001 with its own mobile.db.
 
 **Phase 3 — RAG Improvement ✓ Complete**
 
@@ -113,8 +114,6 @@ the web frontend must be reproduced in the mobile app.
 
 Theme: simple, natural colours with rounded corners, broadly consistent
 with the existing web frontend. Target both iOS and Android via Expo.
-
-Steps 1–4 complete. Step 5 is next.
 
 **Step 1 — Project scaffold ✓**
 Expo Router project created under /mobile/app. File-system routing with
@@ -233,11 +232,28 @@ overview — no failures found.
 
 **Phase 5 — Mobile Frontend (Expo) ✓ Complete**
 
-**→ Current: Phase 6 — Summary Improvements**
+**Phase 6 — Summary Improvements ✓ Complete**
 
-**Phase 6 — Summary Improvements**
-Follow the existing web implementation for group summaries and student
-contribution input. Revisit scope after Phase 5 is complete.
+Added a new StudentSummary database table to store each saved student summary
+as a separate row, so the full edit history is kept. On first startup, any
+existing text in Group.student_summary is copied into the new table automatically.
+
+New endpoints added to the mobile backend:
+- GET /groups/{id}/student-summary/history — returns all saved student summaries newest first
+- GET /groups/{id}/summary/history — returns all AI summaries newest first
+
+The AI generation prompt now pulls in two extra pieces of context when
+available: the previous AI summary (so the new one can note what changed)
+and the most recent student-written summary (so the AI can compare what
+students say against what the chat transcript shows).
+
+Mobile UI changes:
+- AI Overview tab: shows a Student Summary card below the main summary (same
+  text fed into the AI prompt), a Previous Summary card (the generation before
+  the current one), and a History button that opens a full history modal
+- Student Overview tab: History button opens a modal showing all past saves
+
+**→ Current: Phase 7 — Testing & Wrap-Up**
 
 **Phase 7 — Testing & Wrap-Up**
 End-to-end testing, RAG eval re-run, document results.

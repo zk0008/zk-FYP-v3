@@ -180,6 +180,36 @@ def init_demo_data():
         db.close()
 
 
+def migrate_student_summaries():
+    # runs once on startup — copies any existing Group.student_summary text into
+    # the new student_summaries table so we don't lose data when switching to the new model
+    db = SessionLocal()
+    try:
+        # already migrated on a previous startup — nothing to do
+        if db.query(models.StudentSummary).first():
+            return
+
+        groups_with_text = db.query(models.Group).filter(
+            models.Group.student_summary != None,
+            models.Group.student_summary != ""
+        ).all()
+
+        for group in groups_with_text:
+            db.add(models.StudentSummary(
+                group_id=group.string_id,
+                summary_text=group.student_summary,
+                created_at=datetime.utcnow(),
+                created_by_user_id=None,
+            ))
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Error during student summary migration: {str(e)}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 async def startup_event():
     """Run initialization tasks when the app starts."""
@@ -193,6 +223,8 @@ async def startup_event():
             conn.commit()
         except Exception:
             pass  # column already exists — safe to ignore
+    # Copy any existing Group.student_summary text into the new student_summaries table
+    migrate_student_summaries()
     # Ensure uploads directory exists
     PDF_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     # Only initialize demo data if SKIP_DEMO_DATA is not set (i.e., in local development)
@@ -1308,11 +1340,9 @@ def generate_summary(
         models.Summary.group_id == group_id,
         models.Summary.range_type == range
     ).order_by(models.Summary.created_at.desc()).first()
-    
+
     if existing_summary and existing_summary.source_last_message_ts:
-        # Check if the latest message timestamp matches
         if existing_summary.source_last_message_ts == latest_message_ts:
-            # No new messages, return existing summary
             return {
                 "group_id": existing_summary.group_id,
                 "range": existing_summary.range_type,
@@ -1323,16 +1353,25 @@ def generate_summary(
                 "source_last_message_ts": existing_summary.source_last_message_ts.isoformat() if existing_summary.source_last_message_ts else None,
                 "source_message_count": existing_summary.source_message_count
             }
-    
+
     # Build transcript from messages
     transcript_lines = []
     for msg in messages:
         timestamp_str = msg.timestamp.strftime("%Y-%m-%d %H:%M")
         username = "AI Bot" if msg.is_AI else (msg.user.username if msg.user else "Unknown")
         transcript_lines.append(f"[{timestamp_str}] {username}: {msg.content}")
-    
+
     transcript = "\n".join(transcript_lines)
-    
+
+    # use the last AI summary as context so the new one can note what's changed
+    previous_ai_text = existing_summary.summary_text if existing_summary else None
+
+    # pull the most recent student-written summary for comparison context
+    latest_student = db.query(models.StudentSummary).filter(
+        models.StudentSummary.group_id == group_id
+    ).order_by(models.StudentSummary.created_at.desc()).first()
+    student_summary_text = latest_student.summary_text if latest_student else None
+
     # Check if OpenAI client is available
     if not openai_client:
         # If OpenAI is not available, save an error summary
@@ -1366,7 +1405,24 @@ def generate_summary(
                 "  - Review the project timeline and provide guidance on priority tasks\n"
                 "  - Follow up with the client to confirm feedback session details"
             )
-            
+
+            # if a previous AI summary exists, ask the model to note what has changed
+            if previous_ai_text:
+                system_prompt += (
+                    "\n\nFor reference, here is the previous AI summary generated for this group:\n\n"
+                    + previous_ai_text
+                    + "\n\nIn your new summary, briefly note what has changed or progressed since then."
+                )
+
+            # if the students wrote their own summary, ask the model to compare it
+            if student_summary_text:
+                system_prompt += (
+                    "\n\nThe students have also written their own account of their progress:\n\n"
+                    + student_summary_text
+                    + "\n\nCompare what the students say with what the chat transcript shows. "
+                    "Note any differences or areas of growth, and incorporate this into the Supervisor Action Plan."
+                )
+
             user_prompt = f"Please create a summary of the following group chat conversation:\n\n{transcript}"
             
             # Call OpenAI API
@@ -1418,6 +1474,38 @@ def generate_summary(
     }
 
 
+@app.get("/groups/{group_id}/summary/history")
+def get_summary_history(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Return all AI summaries for a group, newest first.
+    Access: coordinator OR group member (same as the summary endpoints).
+    """
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    if not check_summary_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    rows = db.query(models.Summary).filter(
+        models.Summary.group_id == group_id
+    ).order_by(models.Summary.created_at.desc()).all()
+
+    return [
+        {
+            "id": r.id,
+            "summary_text": r.summary_text,
+            "created_at": r.created_at.isoformat(),
+            "source_message_count": r.source_message_count,
+        }
+        for r in rows
+    ]
+
+
 @app.get("/groups/{group_id}/student-summary")
 def get_student_summary(
     group_id: str,
@@ -1425,22 +1513,24 @@ def get_student_summary(
     db: Session = Depends(get_db)
 ):
     """
-    Get the student summary for a group.
+    Get the most recent student summary for a group.
     Access: All group members (students, supervisors, coordinators).
     """
-    # Check if group exists in database
     db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
     if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
-    
-    # Check authorization (all group members can access)
+
     if not check_group_access(group_id, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this group")
-    
-    # Return the student summary (can be None/empty)
+
+    # most recent entry, or empty string if none exists yet
+    row = db.query(models.StudentSummary).filter(
+        models.StudentSummary.group_id == group_id
+    ).order_by(models.StudentSummary.created_at.desc()).first()
+
     return {
         "group_id": group_id,
-        "summary_text": db_group.student_summary or ""
+        "summary_text": row.summary_text if row else ""
     }
 
 
@@ -1452,28 +1542,61 @@ def update_student_summary(
     db: Session = Depends(get_db)
 ):
     """
-    Update the student summary for a group.
+    Save a new student summary for a group (inserts a row, keeps history).
     Access: All group members (students, supervisors, coordinators).
     """
-    # Check if group exists in database
     db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
     if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
-    
-    # Check authorization (all group members can update)
+
     if not check_group_access(group_id, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this group")
-    
-    # Update the student summary
-    db_group.student_summary = request.summary_text
+
+    # insert a new row so the full edit history is preserved
+    new_entry = models.StudentSummary(
+        group_id=group_id,
+        summary_text=request.summary_text,
+        created_by_user_id=current_user.id,
+    )
+    db.add(new_entry)
     db.commit()
-    db.refresh(db_group)
-    
-    # Return the updated summary
+    db.refresh(new_entry)
+
     return {
         "group_id": group_id,
-        "summary_text": db_group.student_summary or ""
+        "summary_text": new_entry.summary_text
     }
+
+
+@app.get("/groups/{group_id}/student-summary/history")
+def get_student_summary_history(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Return all saved student summaries for a group, newest first.
+    Access: All group members (students, supervisors, coordinators).
+    """
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    rows = db.query(models.StudentSummary).filter(
+        models.StudentSummary.group_id == group_id
+    ).order_by(models.StudentSummary.created_at.desc()).all()
+
+    return [
+        {
+            "id": r.id,
+            "summary_text": r.summary_text,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
 
 
 @app.get("/notifications")

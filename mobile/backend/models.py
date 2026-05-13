@@ -32,6 +32,7 @@ class Group(Base):
     messages = relationship("Message", back_populates="group")
     documents = relationship("Document", back_populates="group")
     summaries = relationship("Summary", back_populates="group")
+    student_summaries = relationship("StudentSummary", back_populates="group")
 
 
 class GroupMember(Base):
@@ -96,6 +97,19 @@ class Summary(Base):
 
     # Relationships
     group = relationship("Group", back_populates="summaries")
+    created_by = relationship("User")
+
+
+class StudentSummary(Base):
+    __tablename__ = "student_summaries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(String, ForeignKey("groups.string_id"), nullable=False)
+    summary_text = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    group = relationship("Group", back_populates="student_summaries")
     created_by = relationship("User")
 
 
