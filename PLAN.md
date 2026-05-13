@@ -199,11 +199,23 @@ cache, then opens the system share sheet so the user can view or save it.
 Tapping delete shows a confirmation alert before calling DELETE on the backend
 and removes the row from the list on success.
 
-**→ Current: Step 6**
+**Step 6 — AI Overview tab ✓**
 
-**Step 6 — AI Overview tab**
-- Display latest weekly summary
-- Refresh button (POST to regenerate)
+AI Overview screen built. Fetches the latest weekly summary from the backend
+on tab open and displays it in a scrollable card. Text formatting is ported
+from the web frontend — leading dashes become bullet points, and "Key points:"
+and "Supervisor Action Plan:" are bolded. The last updated timestamp is shown
+in Singapore time with the same UTC-to-SGT fix the web uses. A Refresh button
+calls the POST endpoint to regenerate the summary and updates the card on
+success. If no summary exists yet an empty state message is shown with the
+refresh button still available.
+
+Also fixed in this step: AI bot messages in the Chats tab were rendering raw
+markdown syntax as literal characters. MessageBubble.tsx now formats bot
+messages the same way the web frontend does — ### headings go bold, **word**
+goes bold, and leading dashes become bullet points.
+
+**→ Current: Step 7**
 
 **Step 7 — Student Overview tab**
 - View and edit collaborative student summary text

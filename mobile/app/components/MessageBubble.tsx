@@ -9,7 +9,51 @@ type Props = {
   isTagged: boolean; // current user is @mentioned in this message
 };
 
-// memo prevents re-renders when the parent FlatList re-renders for unrelated reasons
+// Port of web's formatPlainText — handles ### headings, **bold**, leading bullet dashes,
+// and newlines in a way that works with React Native Text (no HTML/dangerouslySetInnerHTML)
+function renderPlainText(text: string) {
+  const lines = text.split("\n");
+  return lines.map((line, lineIdx) => {
+    const sep = lineIdx < lines.length - 1 ? "\n" : "";
+
+    // ### heading → bold the whole line
+    const headerMatch = line.match(/^###\s+(.*)/);
+    if (headerMatch) {
+      return (
+        <Text key={lineIdx}>
+          <Text style={styles.bold}>{headerMatch[1]}</Text>
+          {sep}
+        </Text>
+      );
+    }
+
+    // leading - or * turns into a bullet character
+    const bulleted = line.replace(/^\s*[-*]\s/, "• ");
+
+    // split on **bold** markers, keeping the matched segments
+    const parts = bulleted.split(/(\*\*(?:(?!\*\*).)+?\*\*)/);
+    const hasBold = parts.some((p) => p.startsWith("**") && p.endsWith("**"));
+
+    if (!hasBold) {
+      return <Text key={lineIdx}>{bulleted}{sep}</Text>;
+    }
+
+    return (
+      <Text key={lineIdx}>
+        {parts.map((part, pi) =>
+          part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
+            <Text key={pi} style={styles.bold}>{part.slice(2, -2)}</Text>
+          ) : (
+            part
+          )
+        )}
+        {sep}
+      </Text>
+    );
+  });
+}
+
+// memo prevents re-renders when the parent ScrollView re-renders for unrelated reasons
 export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged }: Props) {
   if (isOwn) {
     return (
@@ -26,7 +70,7 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
       <View style={styles.rowLeft}>
         <Text style={styles.senderLabel}>AI Bot</Text>
         <View style={[styles.bubble, styles.botBubble]}>
-          <Text style={styles.otherText}>{text}</Text>
+          <Text style={styles.otherText}>{renderPlainText(text)}</Text>
         </View>
       </View>
     );
@@ -90,5 +134,8 @@ const styles = StyleSheet.create({
     color: "#1a1a1a",
     fontSize: 15,
     lineHeight: 20,
+  },
+  bold: {
+    fontWeight: "bold",
   },
 });
