@@ -215,11 +215,25 @@ markdown syntax as literal characters. MessageBubble.tsx now formats bot
 messages the same way the web frontend does — ### headings go bold, **word**
 goes bold, and leading dashes become bullet points.
 
-**→ Current: Step 7**
+**Step 7 — Student Overview tab ✓**
 
-**Step 7 — Student Overview tab**
-- View and edit collaborative student summary text
-- Save button (POST to persist)
+Student Overview screen built. Shows the group's collaborative summary
+text in a multiline editable input that fills the available space. On
+focus the current text is fetched from the backend; the Save button is
+disabled until the user edits the text, then re-disabled once the save
+succeeds. Keyboard avoidance keeps the input and Save button visible
+when the keyboard is open. Empty state shows a placeholder prompting
+the user to write something. Fetch failure shows a full-screen error
+with a Retry button; save failure shows a banner without hiding the
+input.
+
+iOS simulator regression checkpoint passed. All seven steps tested
+across auth, group list, chats, documents, AI overview, and student
+overview — no failures found.
+
+**Phase 5 — Mobile Frontend (Expo) ✓ Complete**
+
+**→ Current: Phase 6 — Summary Improvements**
 
 **Phase 6 — Summary Improvements**
 Follow the existing web implementation for group summaries and student
