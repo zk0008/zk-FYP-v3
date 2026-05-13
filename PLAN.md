@@ -188,12 +188,18 @@ getLastNotificationResponseAsync.
 EAS project configured (projectId in app.json). iOS Simulator cannot
 receive push notifications — Apple platform restriction, no workaround.
 
-**→ Current: Step 5**
+**Step 5 — Documents tab ✓**
 
-**Step 5 — Documents tab**
-- Upload PDFs (file picker → multipart POST)
-- List uploaded documents with filename, uploader, size, date
-- View (open in system viewer) and delete
+Documents screen built. Shows all uploaded PDFs for a group in a scrollable
+list with filename, uploader, file size, and upload date. Tapping the upload
+button opens the device file picker filtered to PDFs; the file uploads straight
+away as multipart POST and the list refreshes on success. The download button
+fetches the file from the backend with the JWT header, saves it to the device
+cache, then opens the system share sheet so the user can view or save it.
+Tapping delete shows a confirmation alert before calling DELETE on the backend
+and removes the row from the list on success.
+
+**→ Current: Step 6**
 
 **Step 6 — AI Overview tab**
 - Display latest weekly summary

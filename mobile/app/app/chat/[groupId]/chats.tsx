@@ -150,7 +150,11 @@ export default function Chats() {
     groupId,
     token: token ?? "",
     onMessage: useCallback((msg) => {
-      setMessages((prev) => [...prev, msg]);
+      setMessages((prev) => {
+        // same message can arrive twice if the socket reconnects mid-broadcast — skip it
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        return [...prev, msg];
+      });
       // only auto-scroll if the user is already near the bottom
       if (isAtBottomRef.current) {
         setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);

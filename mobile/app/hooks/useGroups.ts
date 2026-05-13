@@ -65,6 +65,16 @@ export function useGroups() {
           }
         })
       );
+      // sort by the trailing number in the group name (Group 1, Group 2, …)
+      // fall back to alphabetical if neither name has a number
+      enriched.sort((a, b) => {
+        const numA = parseInt(a.name.match(/\d+/)?.[0] ?? "", 10);
+        const numB = parseInt(b.name.match(/\d+/)?.[0] ?? "", 10);
+        if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+        if (!isNaN(numA)) return -1;
+        if (!isNaN(numB)) return 1;
+        return a.name.localeCompare(b.name);
+      });
       setGroups(enriched);
     } catch (err: any) {
       setError(err.message ?? "Failed to load groups");
