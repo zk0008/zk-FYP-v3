@@ -750,6 +750,46 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
         db.close()
 
 
+@app.websocket("/ws/home")
+async def home_websocket_endpoint(websocket: WebSocket):
+    # same auth pattern as /ws/groups/{group_id} — token comes in as a query param
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4008)
+        return
+
+    payload = decode_token(token)
+    if not payload:
+        await websocket.close(code=4008)
+        return
+
+    username = payload.get("sub") or payload.get("username")
+    if not username:
+        await websocket.close(code=4008)
+        return
+
+    db = SessionLocal()
+    try:
+        current_user = db.query(models.User).filter(models.User.username == username).first()
+        if not current_user:
+            await websocket.close(code=4008)
+            return
+
+        await websocket.accept()
+        # register under "__home__" so send_to_user can deliver cross-group nudges here
+        manager.connect(websocket, "__home__", current_user.id)
+
+        try:
+            while True:
+                # client never sends on this socket — discard anything that arrives
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            manager.disconnect("__home__", current_user.id, websocket)
+
+    finally:
+        db.close()
+
+
 # Authentication dependency
 def get_current_user(
     authorization: str = Header(None),

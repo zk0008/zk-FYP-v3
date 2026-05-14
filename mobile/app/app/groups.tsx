@@ -8,26 +8,51 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { useGroups, type Group } from "../hooks/useGroups";
+
+const WS_BASE = process.env.EXPO_PUBLIC_WS_URL ?? "ws://127.0.0.1:8001";
 
 // Defined outside so the function reference is stable across renders
 const Separator = () => <View style={separatorStyle} />;
 const separatorStyle = { height: 1, backgroundColor: "#f0f0f0", marginLeft: 16 };
 
 export default function Groups() {
-  const { user, logout, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { user, logout, isAuthenticated, isLoading: isAuthLoading, token } = useAuth();
   const { groups, isLoading, error, refresh } = useGroups();
   const router = useRouter();
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Refresh immediately on focus, then poll every 15s while this screen is active
-  // so badge counts stay current without needing a WebSocket on the groups page
+  // Refresh immediately on focus, poll every 15s, and open a home WebSocket so
+  // cross-group nudges from send_to_user land here and trigger an immediate refresh
   useFocusEffect(useCallback(() => {
     refresh();
     const interval = setInterval(refresh, 15000);
-    return () => clearInterval(interval);
-  }, [refresh]));
+
+    function openHomeSocket() {
+      if (!token) return;
+      const ws = new WebSocket(`${WS_BASE}/ws/home?token=${token}`);
+      wsRef.current = ws;
+      // any incoming event (message nudge or notification) means badge counts changed
+      ws.onmessage = () => { refresh(); };
+      ws.onclose = (event) => {
+        // 1000 = intentional close from cleanup — don't reconnect
+        if (event.code !== 1000) {
+          reconnectTimerRef.current = setTimeout(openHomeSocket, 3000);
+        }
+      };
+    }
+    openHomeSocket();
+
+    return () => {
+      clearInterval(interval);
+      reconnectTimerRef.current && clearTimeout(reconnectTimerRef.current);
+      wsRef.current?.close(1000);
+      wsRef.current = null;
+    };
+  }, [refresh, token]));
 
   // If useGroups detected a 401 and called logout(), isAuthenticated goes false → send to login
   useEffect(() => {

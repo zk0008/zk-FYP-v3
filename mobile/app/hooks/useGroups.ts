@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useAuth } from "./useAuth";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
@@ -16,10 +16,14 @@ export function useGroups() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // tracks whether the first load has completed — background poll ticks skip the spinner
+  const hasLoadedRef = useRef(false);
 
   const fetchGroups = useCallback(async () => {
     if (!token) return;
-    setIsLoading(true);
+    if (!hasLoadedRef.current) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/my-groups`, {
@@ -76,6 +80,7 @@ export function useGroups() {
         return a.name.localeCompare(b.name);
       });
       setGroups(enriched);
+      hasLoadedRef.current = true;
     } catch (err: any) {
       setError(err.message ?? "Failed to load groups");
     } finally {

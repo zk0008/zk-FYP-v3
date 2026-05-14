@@ -64,7 +64,7 @@ export default function Chats() {
   // Fetch messages + unread count in parallel, then mark as read.
   // Unread count must be captured before /read resets last_read_message_id on the server.
   useEffect(() => {
-    if (!token) return;
+    if (!token || !groupId) return;
     setIsLoading(true);
     setFetchError(null);
     setIsScrollReady(false);
@@ -138,7 +138,7 @@ export default function Chats() {
         isFirstFocusRef.current = false;
         return;
       }
-      if (!token) return;
+      if (!token || !groupId) return;
       fetch(`${API_BASE}/groups/${groupId}/read`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -159,6 +159,12 @@ export default function Chats() {
       if (isAtBottomRef.current) {
         setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
       }
+      // advance last_read_message_id so incoming messages aren't counted as unread
+      // on the group list — also clears any @mention notification for this message
+      fetch(`${API_BASE}/groups/${groupId}/read`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
     }, []),
     onNotification: useCallback(() => {
       // cross-group @mention badge — groups screen re-fetches on focus, nothing to do here

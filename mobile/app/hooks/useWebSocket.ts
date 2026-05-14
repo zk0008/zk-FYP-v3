@@ -53,6 +53,8 @@ export function useWebSocket({ groupId, token, onMessage, onNotification }: Opti
     // don't stack connections
     if (wsRef.current?.readyState === WebSocket.OPEN ||
         wsRef.current?.readyState === WebSocket.CONNECTING) return;
+    // groupId can be undefined during Expo Router state restore — don't connect until it's real
+    if (!groupId || !token) return;
 
     const url = `${WS_BASE}/ws/groups/${groupId}?token=${token}`;
     const ws = new WebSocket(url);
