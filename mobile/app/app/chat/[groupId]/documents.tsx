@@ -136,6 +136,10 @@ export default function Documents() {
     setDownloadingId(doc.id);
     setOpError(null);
     try {
+      // clear any previously cached copy so downloadFileAsync doesn't error on an existing file
+      const cached = new File(new Directory(Paths.cache), doc.filename);
+      if (cached.exists) cached.delete();
+
       // static File.downloadFileAsync saves the file into the given directory and returns
       // a File handle — headers carry the JWT so the backend accepts the request
       const downloaded = await File.downloadFileAsync(
