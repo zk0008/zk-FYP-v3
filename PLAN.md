@@ -98,11 +98,11 @@ The mobile backend gained four new REST endpoints: GET /notifications,
 POST /notifications/{id}/read, GET /groups/{id}/unread, and
 POST /groups/{id}/read.
 
-Known gap: the cross-group badge only updates in real time if the user
-is connected to a different group's WebSocket. If they're not connected
-at all, the badge won't tick up until the next page load. Fixing this
-properly would need a separate notification channel or polling, deferred
-for now.
+Known gap resolved: cross-group badge updates were originally deferred because
+users not connected to any group WebSocket wouldn't see badge changes until
+the next page load. This has since been fixed — a user-scoped /ws/home
+WebSocket endpoint was added so users on the group list screen receive
+real-time badge updates without any polling lag.
 
 Note: /frontend was intentionally modified for Phase 4 WebSocket
 integration. All existing web features remain intact.
@@ -252,6 +252,43 @@ Mobile UI changes:
   text fed into the AI prompt), a Previous Summary card (the generation before
   the current one), and a History button that opens a full history modal
 - Student Overview tab: History button opens a modal showing all past saves
+
+**Post-Phase 6 Fixes & Improvements**
+
+After Phase 6 wrapped up, several bugs were fixed and small improvements were
+made before moving on to testing.
+
+Real-time group list badges: a new /ws/home WebSocket endpoint was added to
+the backend. Users sitting on the group list screen now connect to this socket
+and receive a nudge whenever a message or @mention arrives in any of their
+groups — badge counts update instantly instead of waiting for the next
+15-second poll.
+
+Polling spinner fix: the 15-second background badge refresh was setting
+isLoading to true on every tick, which hid the group list momentarily each
+time. Now the loading spinner only appears on the very first load; background
+polls happen silently.
+
+Unread count on navigate-back: messages received or sent while the user is
+actively viewing a group chat were being counted as unread when they navigated
+back to the group list. Fixed by posting to /read whenever a new message
+arrives over the WebSocket while the chat screen is open.
+
+Spurious WebSocket connections: when Expo Router restores navigation state on
+app launch, the chat screen can mount before groupId is resolved, causing
+connections to /ws/groups/undefined. Fixed by guarding all fetches and the
+WebSocket hook so nothing fires until groupId is a non-empty string.
+
+DOCX indexing: uploaded .docx files are now extracted and indexed into
+ChromaDB on upload using python-docx, so @ai questions can draw from Word
+documents as well as PDFs. Old-format .doc files are stored but not indexed
+since python-docx cannot parse the binary format.
+
+Document upload: the upload button and file picker now accept PDF, DOC, and
+DOCX files, not just PDFs. Labels updated throughout the documents screen.
+
+Tab bar icons: Ionicons icons added to all four tabs in the group chat
+navigator (Chats, Documents, AI Overview, Student).
 
 **→ Current: Phase 7 — Testing & Wrap-Up**
 
