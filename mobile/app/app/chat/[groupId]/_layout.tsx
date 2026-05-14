@@ -1,5 +1,6 @@
 import { Tabs, Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { TouchableOpacity, Text } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 export default function GroupTabLayout() {
   const { name } = useLocalSearchParams<{ name?: string }>();
@@ -43,13 +44,29 @@ export default function GroupTabLayout() {
             title: "Chats",
             // hide the tab bar when the keyboard opens so the input is never covered
             tabBarHideOnKeyboard: true,
+            tabBarIcon: ({ color }) => <Ionicons name="chatbubbles-outline" size={22} color={color} />,
           }}
         />
-        <Tabs.Screen name="documents" options={{ title: "Documents" }} />
-        <Tabs.Screen name="ai-overview" options={{ title: "AI Overview" }} />
+        <Tabs.Screen
+          name="documents"
+          options={{
+            title: "Documents",
+            tabBarIcon: ({ color }) => <Ionicons name="document-text-outline" size={22} color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="ai-overview"
+          options={{
+            title: "AI Overview",
+            tabBarIcon: ({ color }) => <Ionicons name="sparkles-outline" size={22} color={color} />,
+          }}
+        />
         <Tabs.Screen
           name="student-overview"
-          options={{ title: "Student" }}
+          options={{
+            title: "Student",
+            tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={22} color={color} />,
+          }}
         />
       </Tabs>
     </>
