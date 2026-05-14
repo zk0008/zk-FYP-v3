@@ -19,6 +19,7 @@ uvicorn[standard]
 openai
 python-multipart
 pypdf
+python-docx
 sqlalchemy
 python-dotenv
 psycopg[binary]

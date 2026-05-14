@@ -264,7 +264,7 @@ export default function Documents() {
               <Text style={styles.uploadBtnText}>Uploading…</Text>
             </>
           ) : (
-            <Text style={styles.uploadBtnText}>+ Upload PDF</Text>
+            <Text style={styles.uploadBtnText}>+ Upload Document</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -297,7 +297,7 @@ export default function Documents() {
       {!isLoading && fetchError === null && docs.length === 0 && (
         <View style={styles.center}>
           <Text style={styles.emptyText}>
-            No documents yet. Upload a PDF to get started.
+            No documents yet. Upload a PDF, DOC, or DOCX to get started.
           </Text>
         </View>
       )}

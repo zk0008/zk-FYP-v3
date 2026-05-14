@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import OpenAI
 from pypdf import PdfReader
+from docx import Document as DocxDocument
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from tavily import TavilyClient
@@ -1162,8 +1163,8 @@ async def upload_document(
     db.commit()
     db.refresh(document)
 
-    # Index the PDF text in ChromaDB so the RAG pipeline can search it.
-    # doc/docx files are stored on disk but can't be indexed — only PDFs.
+    # Index file text into ChromaDB so the RAG pipeline can search it.
+    # .doc is the old binary Word format — python-docx can't read it, so those are stored but not indexed.
     if file_ext == '.pdf':
         try:
             reader = PdfReader(file_path)
@@ -1173,6 +1174,15 @@ async def upload_document(
         except Exception as e:
             # Don't block the upload if indexing fails — just log it
             print(f"Warning: failed to index {file.filename} for RAG: {str(e)}")
+    elif file_ext == '.docx':
+        try:
+            reader = DocxDocument(file_path)
+            doc_text = "\n".join(p.text for p in reader.paragraphs if p.text.strip())
+            if doc_text.strip():
+                index_document(group_id, file.filename, doc_text)
+        except Exception as e:
+            print(f"Warning: failed to index {file.filename} for RAG: {str(e)}")
+    # .doc files land here — stored on disk, skipped for indexing since python-docx can't parse the old binary format
 
     # Get file size
     file_size = os.path.getsize(file_path)
