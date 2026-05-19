@@ -19,12 +19,40 @@ import MessageBubble from "../../../components/MessageBubble";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// plain YYYY-MM-DD in SGT so day-boundary comparisons don't need Intl
+function sgtDateKey(isoString: string): string {
+  const iso = isoString.includes("Z") || isoString.includes("+") ? isoString : isoString + "Z";
+  const sgt = new Date(new Date(iso).getTime() + 8 * 60 * 60 * 1000);
+  const y = sgt.getUTCFullYear();
+  const mo = String(sgt.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(sgt.getUTCDate()).padStart(2, "0");
+  return `${y}-${mo}-${d}`;
+}
+
+// "Today", "Yesterday", or "12 May 2025" — all in SGT, no Intl needed.
+function dateSeparatorLabel(isoString: string): string {
+  const todayKey = sgtDateKey(new Date().toISOString());
+  const key = sgtDateKey(isoString);
+  if (key === todayKey) return "Today";
+  const [ty, tm, td] = todayKey.split("-").map(Number);
+  const [ky, km, kd] = key.split("-").map(Number);
+  // compare as calendar days — Date.UTC lets us diff without timezone tricks
+  const diff = (Date.UTC(ty, tm - 1, td) - Date.UTC(ky, km - 1, kd)) / 86400000;
+  if (diff === 1) return "Yesterday";
+  return `${kd} ${MONTH_NAMES[km - 1]} ${ky}`;
+}
+
 type Message = {
   id: number;
   sender: string;
   text: string;
   is_bot: boolean;
+  timestamp: string;
 };
+
+type Member = { username: string };
 
 export default function Chats() {
   // useGlobalSearchParams needed here — groupId is a parent-route segment ([groupId]/_layout),
@@ -36,6 +64,7 @@ export default function Chats() {
   const headerHeight = useHeaderHeight();
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
@@ -60,6 +89,17 @@ export default function Chats() {
     });
     return () => sub.remove();
   }, []);
+
+  // Fetch the group member list once on mount so the @mention picker has names to show
+  useEffect(() => {
+    if (!token || !groupId) return;
+    fetch(`${API_BASE}/groups/${groupId}/members`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: Member[]) => setMembers(data))
+      .catch(() => {});
+  }, [groupId, token]);
 
   // Fetch messages + unread count in parallel, then mark as read.
   // Unread count must be captured before /read resets last_read_message_id on the server.
@@ -171,6 +211,11 @@ export default function Chats() {
     }, []),
   });
 
+  // Replace the trailing @partial in the input with the chosen @username and close the picker
+  const handleMentionSelect = (username: string) => {
+    setInputText((prev) => prev.replace(/@\w*$/, `@${username} `));
+  };
+
   const handleSend = () => {
     const text = inputText.trim();
     if (!text || !isConnected) return;
@@ -189,6 +234,14 @@ export default function Chats() {
     isAtBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
   };
+
+  // Look for a trailing @word in the input — if found, show matching members in the picker
+  const mentionMatch = inputText.match(/@(\w*)$/);
+  const mentionQuery = mentionMatch ? mentionMatch[1].toLowerCase() : null;
+  const mentionMatches =
+    mentionQuery !== null
+      ? members.filter((m) => m.username.toLowerCase().startsWith(mentionQuery))
+      : [];
 
   return (
     <KeyboardAvoidingView
@@ -226,13 +279,17 @@ export default function Chats() {
               scrollEventThrottle={16}
               keyboardShouldPersistTaps="handled"
             >
-              {messages.map((msg) => {
+              {messages.map((msg, idx) => {
                 const isOwn = msg.sender === user?.username;
                 const isTagged =
                   !isOwn &&
                   !msg.is_bot &&
                   !!user?.username &&
                   msg.text.includes(`@${user.username}`);
+                // show a date pill whenever the SGT day changes between consecutive messages
+                const prevMsg = messages[idx - 1];
+                const showSeparator =
+                  !prevMsg || sgtDateKey(prevMsg.timestamp) !== sgtDateKey(msg.timestamp);
                 return (
                   <View
                     key={msg.id}
@@ -241,12 +298,20 @@ export default function Chats() {
                       messageYsRef.current[msg.id] = e.nativeEvent.layout.y;
                     }}
                   >
+                    {showSeparator && (
+                      <View style={styles.dateSeparator}>
+                        <Text style={styles.dateSeparatorText}>
+                          {dateSeparatorLabel(msg.timestamp)}
+                        </Text>
+                      </View>
+                    )}
                     <MessageBubble
                       sender={msg.sender}
                       text={msg.text}
                       is_bot={msg.is_bot}
                       isOwn={isOwn}
                       isTagged={isTagged}
+                      timestamp={msg.timestamp}
                     />
                   </View>
                 );
@@ -268,6 +333,29 @@ export default function Chats() {
             </View>
           )}
         </>
+      )}
+
+      {mentionMatches.length > 0 && (
+        <View style={styles.mentionPicker}>
+          <ScrollView keyboardShouldPersistTaps="always">
+            {mentionMatches.map((m) => (
+              <TouchableOpacity
+                key={m.username}
+                style={styles.mentionItem}
+                onPress={() => handleMentionSelect(m.username)}
+              >
+                <Text
+                  style={[
+                    styles.mentionItemText,
+                    m.username === "ai" && styles.mentionItemAi,
+                  ]}
+                >
+                  @{m.username}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
       )}
 
       <View style={styles.inputBar}>
@@ -404,5 +492,39 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 20,
     lineHeight: 24,
+  },
+  dateSeparator: {
+    alignItems: "center",
+    marginVertical: 10,
+  },
+  dateSeparatorText: {
+    backgroundColor: "#d0d8e4",
+    color: "#4a4a4a",
+    fontSize: 11,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  mentionPicker: {
+    backgroundColor: "#ffffff",
+    borderTopWidth: 1,
+    borderTopColor: "#e0e0e0",
+    maxHeight: 160,
+  },
+  mentionItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#e0e0e0",
+  },
+  mentionItemText: {
+    fontSize: 14,
+    color: "#1a1a1a",
+  },
+  mentionItemAi: {
+    // purple so @ai stands out from regular member names — matches the AI bubble colour
+    color: "#7e57c2",
+    fontWeight: "600",
   },
 });

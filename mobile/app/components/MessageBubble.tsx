@@ -7,7 +7,20 @@ type Props = {
   is_bot: boolean;
   isOwn: boolean;
   isTagged: boolean; // current user is @mentioned in this message
+  timestamp: string;
 };
+
+// Append Z if the ISO string has no timezone suffix so Date treats it as UTC, not local time.
+// Then manually shift to SGT (UTC+8) — avoids Intl timezone support which is patchy in Hermes.
+function formatSGT(isoString: string): string {
+  const iso = isoString.includes("Z") || isoString.includes("+") ? isoString : isoString + "Z";
+  const sgt = new Date(new Date(iso).getTime() + 8 * 60 * 60 * 1000);
+  const h = sgt.getUTCHours();
+  const m = sgt.getUTCMinutes().toString().padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${m} ${ampm}`;
+}
 
 // Port of web's formatPlainText — handles ### headings, **bold**, leading bullet dashes,
 // and newlines in a way that works with React Native Text (no HTML/dangerouslySetInnerHTML)
@@ -54,13 +67,16 @@ function renderPlainText(text: string) {
 }
 
 // memo prevents re-renders when the parent ScrollView re-renders for unrelated reasons
-export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged }: Props) {
+export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp }: Props) {
+  const timeLabel = formatSGT(timestamp);
+
   if (isOwn) {
     return (
       <View style={styles.rowRight}>
         <View style={[styles.bubble, styles.ownBubble]}>
           <Text style={styles.ownText}>{text}</Text>
         </View>
+        <Text style={styles.timestamp}>{timeLabel}</Text>
       </View>
     );
   }
@@ -72,6 +88,7 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
         <View style={[styles.bubble, styles.botBubble]}>
           <Text style={styles.otherText}>{renderPlainText(text)}</Text>
         </View>
+        <Text style={styles.timestamp}>{timeLabel}</Text>
       </View>
     );
   }
@@ -82,6 +99,7 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
       <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
         <Text style={styles.otherText}>{text}</Text>
       </View>
+      <Text style={styles.timestamp}>{timeLabel}</Text>
     </View>
   );
 });
@@ -137,5 +155,11 @@ const styles = StyleSheet.create({
   },
   bold: {
     fontWeight: "bold",
+  },
+  timestamp: {
+    fontSize: 11,
+    color: "#757575",
+    marginTop: 2,
+    marginHorizontal: 4,
   },
 });

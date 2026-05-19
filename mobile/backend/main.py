@@ -631,7 +631,8 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                     "sender": current_user.username,
                     "text": content,
                     "is_bot": False,
-                    "group_string_id": group_id
+                    "group_string_id": group_id,
+                    "timestamp": new_message.timestamp.isoformat()
                 })
 
                 # Nudge members who are connected to a *different* group's WS
@@ -741,7 +742,8 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                                 "sender": "AI Bot",
                                 "text": ai_message.content,
                                 "is_bot": True,
-                                "group_string_id": group_id
+                                "group_string_id": group_id,
+                                "timestamp": ai_message.timestamp.isoformat()
                             })
 
         except WebSocketDisconnect:
@@ -979,6 +981,35 @@ def check_summary_access(group_id: str, current_user: models.User, db: Session) 
     return membership is not None
 
 
+@app.get("/groups/{group_id}/members")
+def list_group_members(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    # everyone in the group except the caller — they can't @mention themselves
+    members = db.query(models.User).join(
+        models.GroupMember,
+        models.GroupMember.user_id == models.User.id
+    ).filter(
+        models.GroupMember.group_id == db_group.id,
+        models.User.id != current_user.id
+    ).all()
+
+    result = [{"username": m.username} for m in members]
+    # "ai" is a special mention target that triggers the RAG pipeline
+    result.append({"username": "ai"})
+
+    return result
+
+
 @app.get("/groups/{group_id}/messages")
 def list_messages(
     group_id: str,
@@ -1007,7 +1038,8 @@ def list_messages(
             "id": msg.id,
             "sender": sender,
             "text": msg.content,
-            "is_bot": msg.is_AI
+            "is_bot": msg.is_AI,
+            "timestamp": msg.timestamp.isoformat()
         })
     
     return result

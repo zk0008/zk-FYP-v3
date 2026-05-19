@@ -14,6 +14,7 @@ export type MessagePayload = {
   text: string;
   is_bot: boolean;
   group_string_id: string;
+  timestamp: string;
 };
 
 export type NotificationPayload = {
