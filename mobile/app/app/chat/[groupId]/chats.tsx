@@ -10,7 +10,9 @@ import {
   Keyboard,
   Platform,
   StyleSheet,
+  Alert,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { useGlobalSearchParams, useFocusEffect } from "expo-router";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { useAuth } from "../../../hooks/useAuth";
@@ -50,6 +52,8 @@ type Message = {
   text: string;
   is_bot: boolean;
   timestamp: string;
+  message_type?: string;
+  image_url?: string;
 };
 
 type Member = { username: string };
@@ -226,6 +230,77 @@ export default function Chats() {
     setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 200);
   };
 
+  // POST the picked image to the backend; WS broadcast delivers it to all clients
+  const handleImageUpload = async (uri: string, filename: string, mimeType: string) => {
+    if (!token || !groupId) return;
+    const formData = new FormData();
+    formData.append("file", { uri, name: filename, type: mimeType } as any);
+    try {
+      await fetch(`${API_BASE}/groups/${groupId}/messages/image`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+    } catch {
+      Alert.alert("Upload failed", "Could not send the image. Please try again.");
+    }
+  };
+
+  const handleAttach = () => {
+    Alert.alert("Send Image", "Choose a source", [
+      {
+        text: "Photo Library",
+        onPress: async () => {
+          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (status !== "granted") {
+            Alert.alert("Permission required", "Allow photo library access in Settings to send images.");
+            return;
+          }
+          const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"],
+            allowsEditing: false,
+            quality: 0.8,
+          });
+          if (result.canceled || result.assets.length === 0) return;
+          const asset = result.assets[0];
+          // frontend size check — 5 MB limit
+          if (asset.fileSize && asset.fileSize > 5 * 1024 * 1024) {
+            Alert.alert("Image too large", "Please choose an image under 5 MB.");
+            return;
+          }
+          const ext = asset.mimeType === "image/png" ? ".png" : ".jpg";
+          const filename = asset.fileName ?? `photo${ext}`;
+          await handleImageUpload(asset.uri, filename, asset.mimeType ?? "image/jpeg");
+        },
+      },
+      {
+        text: "Take Photo",
+        onPress: async () => {
+          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+          if (status !== "granted") {
+            Alert.alert("Permission required", "Allow camera access in Settings to take photos.");
+            return;
+          }
+          const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            allowsEditing: false,
+            quality: 0.8,
+          });
+          if (result.canceled || result.assets.length === 0) return;
+          const asset = result.assets[0];
+          if (asset.fileSize && asset.fileSize > 5 * 1024 * 1024) {
+            Alert.alert("Image too large", "Please take a photo under 5 MB.");
+            return;
+          }
+          const ext = asset.mimeType === "image/png" ? ".png" : ".jpg";
+          const filename = asset.fileName ?? `photo${ext}`;
+          await handleImageUpload(asset.uri, filename, asset.mimeType ?? "image/jpeg");
+        },
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
   const handleScroll = (event: any) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom =
@@ -312,6 +387,12 @@ export default function Chats() {
                       isOwn={isOwn}
                       isTagged={isTagged}
                       timestamp={msg.timestamp}
+                      message_type={msg.message_type}
+                      image_url={
+                        msg.image_url
+                          ? `${API_BASE}${msg.image_url}?token=${token ?? ""}`
+                          : undefined
+                      }
                     />
                   </View>
                 );
@@ -359,6 +440,13 @@ export default function Chats() {
       )}
 
       <View style={styles.inputBar}>
+        <TouchableOpacity
+          style={styles.attachBtn}
+          onPress={handleAttach}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.attachBtnText}>+</Text>
+        </TouchableOpacity>
         <TextInput
           style={styles.input}
           placeholder={isConnected ? "Message…" : "Connecting…"}
@@ -505,6 +593,19 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 10,
     overflow: "hidden",
+  },
+  attachBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#e8edf2",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  attachBtnText: {
+    color: "#4a4a4a",
+    fontSize: 22,
+    lineHeight: 26,
   },
   mentionPicker: {
     backgroundColor: "#ffffff",

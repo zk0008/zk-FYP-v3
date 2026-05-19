@@ -224,10 +224,16 @@ async def startup_event():
             conn.commit()
         except Exception:
             pass  # column already exists — safe to ignore
+        try:
+            conn.execute(text("ALTER TABLE messages ADD COLUMN message_type VARCHAR DEFAULT 'text' NOT NULL"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists — safe to ignore
     # Copy any existing Group.student_summary text into the new student_summaries table
     migrate_student_summaries()
-    # Ensure uploads directory exists
+    # Ensure uploads directories exist
     PDF_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     # Only initialize demo data if SKIP_DEMO_DATA is not set (i.e., in local development)
     if not os.getenv("SKIP_DEMO_DATA"):
         init_demo_data()
@@ -243,6 +249,10 @@ else:
 # Setup PDF storage directory
 PDF_STORAGE_DIR = Path("uploads/pdfs")
 PDF_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Setup image storage directory for chat images
+IMAGE_STORAGE_DIR = Path("uploads/images")
+IMAGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # In-memory data store for hard-coded groups and messages
 groups = {
@@ -1030,18 +1040,25 @@ def list_messages(
         models.Message.group_id == db_group.id
     ).order_by(models.Message.timestamp).all()
     
-    # Convert to API format: [{id, sender, text, is_bot}]
+    # Convert to API format: [{id, sender, text, is_bot, message_type, image_url, timestamp}]
     result = []
     for msg in messages:
         sender = "AI Bot" if msg.is_AI else (msg.user.username if msg.user else "Unknown")
+        msg_type = msg.message_type if msg.message_type else "text"
+        image_url = (
+            f"/groups/{group_id}/messages/{msg.id}/image"
+            if msg_type == "image" else None
+        )
         result.append({
             "id": msg.id,
             "sender": sender,
             "text": msg.content,
             "is_bot": msg.is_AI,
+            "message_type": msg_type,
+            "image_url": image_url,
             "timestamp": msg.timestamp.isoformat()
         })
-    
+
     return result
 
 
@@ -1090,6 +1107,131 @@ def add_message(
         "text": new_message.content,
         "is_bot": False
     }
+
+
+@app.post("/groups/{group_id}/messages/image")
+async def upload_image_message(
+    group_id: str,
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    # only JPEG and PNG accepted
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in (".jpg", ".jpeg", ".png"):
+        raise HTTPException(status_code=400, detail="Only JPEG and PNG images are allowed")
+
+    content = await file.read()
+
+    # 5 MB hard limit
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image must be 5 MB or smaller")
+
+    # save to uploads/images/{group_id}/{timestamp}_{filename}
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_filename = f"{ts}_{file.filename}"
+    file_path = IMAGE_STORAGE_DIR / group_id / safe_filename
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save image: {str(e)}")
+
+    new_message = models.Message(
+        group_id=db_group.id,
+        user_id=current_user.id,
+        content=str(file_path),
+        is_AI=False,
+        message_type="image"
+    )
+    db.add(new_message)
+    db.commit()
+    db.refresh(new_message)
+
+    image_url = f"/groups/{group_id}/messages/{new_message.id}/image"
+
+    await manager.broadcast_to_group(group_id, {
+        "type": "message",
+        "id": new_message.id,
+        "sender": current_user.username,
+        "text": "",
+        "is_bot": False,
+        "message_type": "image",
+        "image_url": image_url,
+        "group_string_id": group_id,
+        "timestamp": new_message.timestamp.isoformat()
+    })
+
+    return {
+        "id": new_message.id,
+        "sender": current_user.username,
+        "message_type": "image",
+        "image_url": image_url,
+        "timestamp": new_message.timestamp.isoformat()
+    }
+
+
+@app.get("/groups/{group_id}/messages/{message_id}/image")
+def get_image_message(
+    group_id: str,
+    message_id: int,
+    token: str = Query(None),        # Image component can't set headers — accept token here too
+    authorization: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    # prefer query-param token (used by the React Native Image component), fall back to header
+    raw_token = token
+    if not raw_token and authorization:
+        try:
+            _, raw_token = authorization.split()
+        except ValueError:
+            raw_token = None
+
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="Authorization required")
+
+    payload = decode_token(raw_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    username = payload.get("sub") or payload.get("username")
+    current_user = db.query(models.User).filter(models.User.username == username).first()
+    if not current_user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    msg = db.query(models.Message).filter(
+        models.Message.id == message_id,
+        models.Message.group_id == db_group.id,
+        models.Message.message_type == "image"
+    ).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Image message not found")
+
+    file_path = Path(msg.content)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
+
+    # pick the right MIME type from the extension
+    ext = file_path.suffix.lower()
+    mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+
+    return FileResponse(path=file_path, media_type=mime)
 
 
 @app.get("/groups/{group_id}/documents")

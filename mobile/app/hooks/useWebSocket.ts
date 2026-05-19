@@ -15,6 +15,8 @@ export type MessagePayload = {
   is_bot: boolean;
   group_string_id: string;
   timestamp: string;
+  message_type?: string;
+  image_url?: string;
 };
 
 export type NotificationPayload = {

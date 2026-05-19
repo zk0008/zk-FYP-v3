@@ -29,7 +29,7 @@ zk-FYP-v3/
 - Selecting a name inserts @username into the input
 - Self-tagging stays blocked
 
-**Image upload and camera capture**
+**Image upload and camera capture ✓ Complete**
 - Attachment button on the chat input bar — pick from photo library or take a photo
 - Image sent as a chat message, renders as a thumbnail in the thread
 - File type and size validated on both frontend and backend

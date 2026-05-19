@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Image, StyleSheet } from "react-native";
 
 type Props = {
   sender: string;
@@ -8,6 +8,8 @@ type Props = {
   isOwn: boolean;
   isTagged: boolean; // current user is @mentioned in this message
   timestamp: string;
+  message_type?: string;
+  image_url?: string; // fully-constructed authenticated URI, built by chats.tsx
 };
 
 // Append Z if the ISO string has no timezone suffix so Date treats it as UTC, not local time.
@@ -67,15 +69,20 @@ function renderPlainText(text: string) {
 }
 
 // memo prevents re-renders when the parent ScrollView re-renders for unrelated reasons
-export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp }: Props) {
+export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp, message_type, image_url }: Props) {
   const timeLabel = formatSGT(timestamp);
+  const isImage = message_type === "image" && !!image_url;
 
   if (isOwn) {
     return (
       <View style={styles.rowRight}>
-        <View style={[styles.bubble, styles.ownBubble]}>
-          <Text style={styles.ownText}>{text}</Text>
-        </View>
+        {isImage ? (
+          <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOwn]} />
+        ) : (
+          <View style={[styles.bubble, styles.ownBubble]}>
+            <Text style={styles.ownText}>{text}</Text>
+          </View>
+        )}
         <Text style={styles.timestamp}>{timeLabel}</Text>
       </View>
     );
@@ -96,9 +103,13 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
   return (
     <View style={styles.rowLeft}>
       <Text style={styles.senderLabel}>{sender}</Text>
-      <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
-        <Text style={styles.otherText}>{text}</Text>
-      </View>
+      {isImage ? (
+        <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOther]} />
+      ) : (
+        <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
+          <Text style={styles.otherText}>{text}</Text>
+        </View>
+      )}
       <Text style={styles.timestamp}>{timeLabel}</Text>
     </View>
   );
@@ -161,5 +172,18 @@ const styles = StyleSheet.create({
     color: "#757575",
     marginTop: 2,
     marginHorizontal: 4,
+  },
+  imageThumbnail: {
+    width: 200,
+    height: 200,
+    borderRadius: 16,
+  },
+  imageThumbnailOwn: {
+    // matches ownBubble — slightly flattened bottom-right corner
+    borderBottomRightRadius: 4,
+  },
+  imageThumbnailOther: {
+    // matches otherBubble — slightly flattened bottom-left corner
+    borderBottomLeftRadius: 4,
   },
 });

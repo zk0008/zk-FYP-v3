@@ -58,6 +58,7 @@ class Message(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Nullable for AI messages
     content = Column(String, nullable=False)
     is_AI = Column(Boolean, default=False, nullable=False)
+    message_type = Column(String, default="text", nullable=False)  # "text" or "image"
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     sources = Column(JSON, nullable=True)  # Array of source objects: [{"type": "document", "filename": "...", "id": ...}, ...]
 
