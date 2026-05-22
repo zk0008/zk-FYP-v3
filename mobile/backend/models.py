@@ -107,11 +107,25 @@ class StudentSummary(Base):
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String, ForeignKey("groups.string_id"), nullable=False)
     summary_text = Column(Text, nullable=False)
+    ai_summary_copy = Column(Text, nullable=True)   # snapshot of the AI summary at save time
+    is_submitted = Column(Boolean, default=False, nullable=False)
+    submitted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     group = relationship("Group", back_populates="student_summaries")
     created_by = relationship("User")
+
+
+class Deadline(Base):
+    __tablename__ = "deadlines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    deadline_dt = Column(DateTime, nullable=False)
+    set_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    set_by = relationship("User")
 
 
 class PushToken(Base):

@@ -230,6 +230,30 @@ async def startup_event():
             conn.commit()
         except Exception:
             pass  # column already exists — safe to ignore
+        try:
+            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN ai_summary_copy TEXT"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN is_submitted BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN submitted_at DATETIME"))
+            conn.commit()
+        except Exception:
+            pass
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS deadlines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deadline_dt DATETIME NOT NULL,
+                set_by_user_id INTEGER REFERENCES users(id),
+                created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        conn.commit()
     # Copy any existing Group.student_summary text into the new student_summaries table
     migrate_student_summaries()
     # Ensure uploads directories exist
@@ -299,6 +323,11 @@ class LoginRequest(BaseModel):
 
 class StudentSummaryRequest(BaseModel):
     summary_text: str
+    ai_summary_copy: str | None = None
+
+
+class DeadlineRequest(BaseModel):
+    deadline_dt: datetime
 
 
 
@@ -1798,7 +1827,8 @@ def get_student_summary(
 
     return {
         "group_id": group_id,
-        "summary_text": row.summary_text if row else ""
+        "summary_text": row.summary_text if row else "",
+        "ai_summary_copy": row.ai_summary_copy if row else None,
     }
 
 
@@ -1824,6 +1854,7 @@ def update_student_summary(
     new_entry = models.StudentSummary(
         group_id=group_id,
         summary_text=request.summary_text,
+        ai_summary_copy=request.ai_summary_copy,
         created_by_user_id=current_user.id,
     )
     db.add(new_entry)
@@ -1832,7 +1863,8 @@ def update_student_summary(
 
     return {
         "group_id": group_id,
-        "summary_text": new_entry.summary_text
+        "summary_text": new_entry.summary_text,
+        "ai_summary_copy": new_entry.ai_summary_copy,
     }
 
 
@@ -1861,10 +1893,93 @@ def get_student_summary_history(
         {
             "id": r.id,
             "summary_text": r.summary_text,
+            "ai_summary_copy": r.ai_summary_copy,
+            "is_submitted": r.is_submitted,
+            "submitted_at": r.submitted_at.isoformat() if r.submitted_at else None,
             "created_at": r.created_at.isoformat(),
         }
         for r in rows
     ]
+
+
+@app.post("/groups/{group_id}/student-summary/submit")
+def submit_student_summary(
+    group_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "student":
+        raise HTTPException(status_code=403, detail="Only students can submit a summary")
+
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    # most recent save is the one that gets submitted
+    latest = db.query(models.StudentSummary).filter(
+        models.StudentSummary.group_id == group_id
+    ).order_by(models.StudentSummary.created_at.desc()).first()
+
+    if not latest:
+        raise HTTPException(status_code=404, detail="No summary to submit")
+
+    if latest.is_submitted:
+        raise HTTPException(status_code=400, detail="Summary already submitted")
+
+    latest.is_submitted = True
+    latest.submitted_at = datetime.utcnow()
+    db.commit()
+    db.refresh(latest)
+
+    return {
+        "id": latest.id,
+        "group_id": group_id,
+        "summary_text": latest.summary_text,
+        "ai_summary_copy": latest.ai_summary_copy,
+        "is_submitted": latest.is_submitted,
+        "submitted_at": latest.submitted_at.isoformat(),
+        "created_at": latest.created_at.isoformat(),
+    }
+
+
+@app.get("/deadline")
+def get_deadline(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    row = db.query(models.Deadline).order_by(models.Deadline.created_at.desc()).first()
+    if not row:
+        return None
+    return {
+        "deadline_dt": row.deadline_dt.isoformat(),
+        "set_by": row.set_by.username if row.set_by else None,
+    }
+
+
+@app.post("/deadline")
+def set_deadline(
+    body: DeadlineRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "coordinator":
+        raise HTTPException(status_code=403, detail="Only coordinators can set the deadline")
+
+    new_deadline = models.Deadline(
+        deadline_dt=body.deadline_dt,
+        set_by_user_id=current_user.id,
+    )
+    db.add(new_deadline)
+    db.commit()
+    db.refresh(new_deadline)
+
+    return {
+        "deadline_dt": new_deadline.deadline_dt.isoformat(),
+        "set_by": current_user.username,
+    }
 
 
 @app.get("/notifications")

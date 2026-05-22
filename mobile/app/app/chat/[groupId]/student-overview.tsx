@@ -21,8 +21,27 @@ const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 type HistoryItem = {
   id: number;
   summary_text: string;
+  ai_summary_copy: string | null;
+  is_submitted: boolean;
+  submitted_at: string | null;
   created_at: string;
 };
+
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// Manual UTC+8 shift — same approach as formatSGT in MessageBubble, avoids Intl timezone issues on Hermes
+function formatDeadlineSGT(isoString: string): string {
+  const iso = isoString.includes("Z") || isoString.includes("+") ? isoString : isoString + "Z";
+  const sgt = new Date(new Date(iso).getTime() + 8 * 60 * 60 * 1000);
+  const day = sgt.getUTCDate();
+  const mon = MONTH_NAMES[sgt.getUTCMonth()];
+  const year = sgt.getUTCFullYear();
+  const h = sgt.getUTCHours();
+  const m = sgt.getUTCMinutes().toString().padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${day} ${mon} ${year}, ${h12}:${m} ${ampm} SGT`;
+}
 
 function formatDate(iso: string): string {
   // backend returns UTC without a timezone suffix — append Z so the JS engine
@@ -53,6 +72,9 @@ export default function StudentOverview() {
   // savedText is what the server has; editText is what the user is typing
   const [savedText, setSavedText] = useState("");
   const [editText, setEditText] = useState("");
+  // same pattern for the editable AI summary copy
+  const [aiSavedText, setAiSavedText] = useState("");
+  const [aiEditText, setAiEditText] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -63,16 +85,26 @@ export default function StudentOverview() {
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState<number | null>(null);
 
+  // submission state
+  const [deadline, setDeadline] = useState<string | null>(null);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitSuccess, setSubmitSuccess] = useState(false);
+
   const loadSummary = useCallback(async () => {
     if (!token) return;
     setIsLoading(true);
     setFetchError(null);
     try {
-      const [summaryRes, historyRes] = await Promise.all([
+      const [summaryRes, historyRes, deadlineRes] = await Promise.all([
         fetch(`${API_BASE}/groups/${groupId}/student-summary`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
         fetch(`${API_BASE}/groups/${groupId}/student-summary/history`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE}/deadline`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
       ]);
@@ -81,9 +113,31 @@ export default function StudentOverview() {
       const text = data.summary_text ?? "";
       setSavedText(text);
       setEditText(text);
+
+      // use the saved AI copy if one exists; otherwise seed from the AI-generated weekly summary
+      let aiCopy: string = data.ai_summary_copy ?? "";
+      if (!aiCopy) {
+        const aiRes = await fetch(
+          `${API_BASE}/groups/${groupId}/summary?range=weekly`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (aiRes.ok) {
+          const aiData = await aiRes.json();
+          aiCopy = aiData.summary_text ?? "";
+        }
+      }
+      setAiSavedText(aiCopy);
+      setAiEditText(aiCopy);
+
       if (historyRes.ok) {
         const histData: HistoryItem[] = await historyRes.json();
         setHistory(histData);
+        // latest row (index 0) tells us if the current save has already been submitted
+        setIsSubmitted(histData[0]?.is_submitted ?? false);
+      }
+      if (deadlineRes.ok) {
+        const dlData = await deadlineRes.json();
+        setDeadline(dlData ? dlData.deadline_dt : null);
       }
     } catch (e: any) {
       setFetchError(e.message ?? "Failed to load summary");
@@ -112,13 +166,14 @@ export default function StudentOverview() {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ summary_text: editText }),
+          body: JSON.stringify({ summary_text: editText, ai_summary_copy: aiEditText }),
         }
       );
       if (!res.ok) throw new Error(`Save failed (${res.status})`);
       const data = await res.json();
-      // update savedText so the Save button goes back to disabled
+      // update saved state so the Save button goes back to disabled
       setSavedText(data.summary_text ?? editText);
+      setAiSavedText(data.ai_summary_copy ?? aiEditText);
       // reload history so the new entry appears immediately
       const histRes = await fetch(
         `${API_BASE}/groups/${groupId}/student-summary/history`,
@@ -135,7 +190,43 @@ export default function StudentOverview() {
     }
   };
 
-  const hasChanges = editText !== savedText;
+  const hasChanges = editText !== savedText || aiEditText !== aiSavedText;
+
+  const handleSubmit = async () => {
+    if (!token) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    setSubmitSuccess(false);
+    try {
+      const res = await fetch(
+        `${API_BASE}/groups/${groupId}/student-summary/submit`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.detail ?? `Submit failed (${res.status})`);
+      }
+      setIsSubmitted(true);
+      setSubmitSuccess(true);
+    } catch (e: any) {
+      setSubmitError(e.message ?? "Submit failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const deadlinePassed =
+    deadline !== null &&
+    Date.now() >
+      new Date(
+        deadline.includes("Z") || deadline.includes("+") ? deadline : deadline + "Z"
+      ).getTime();
+
+  const submitDisabled =
+    history.length === 0 || isSubmitted || deadlinePassed || submitting || isLoading;
 
   const toggleHistoryItem = (id: number) => {
     setExpandedHistoryId((prev) => (prev === id ? null : id));
@@ -179,10 +270,47 @@ export default function StudentOverview() {
         </View>
       </View>
 
+      {/* Deadline + Submit row — always visible below the header */}
+      <View style={styles.deadlineRow}>
+        <Text style={styles.deadlineText}>
+          {deadline
+            ? `Due: ${formatDeadlineSGT(deadline)}`
+            : "No deadline set"}
+        </Text>
+        <TouchableOpacity
+          style={[styles.submitBtn, submitDisabled && styles.submitBtnDisabled]}
+          onPress={handleSubmit}
+          disabled={submitDisabled}
+          activeOpacity={0.8}
+        >
+          {submitting ? (
+            <ActivityIndicator size="small" color="#ffffff" />
+          ) : (
+            <Text style={styles.submitBtnText}>
+              {isSubmitted ? "Submitted" : "Submit"}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
       {/* Save error banner — stays above the input so it doesn't block it */}
       {saveError !== null && (
         <View style={styles.errorBanner}>
           <Text style={styles.errorBannerText}>{saveError}</Text>
+        </View>
+      )}
+
+      {/* Submit error banner */}
+      {submitError !== null && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{submitError}</Text>
+        </View>
+      )}
+
+      {/* Submit success banner */}
+      {submitSuccess && (
+        <View style={styles.successBanner}>
+          <Text style={styles.successBannerText}>Summary submitted successfully.</Text>
         </View>
       )}
 
@@ -210,7 +338,8 @@ export default function StudentOverview() {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.card}>
+          <Text style={styles.sectionLabel}>Student Summary</Text>
+          <View style={[styles.card, { marginBottom: 20 }]}>
             <TextInput
               style={styles.input}
               multiline
@@ -218,6 +347,20 @@ export default function StudentOverview() {
               value={editText}
               onChangeText={setEditText}
               placeholder="Write a collaborative summary for your group..."
+              placeholderTextColor="#9e9e9e"
+              scrollEnabled={false}
+            />
+          </View>
+
+          <Text style={styles.sectionLabel}>AI Summary (editable copy)</Text>
+          <View style={[styles.card, styles.cardSecond]}>
+            <TextInput
+              style={styles.input}
+              multiline
+              textAlignVertical="top"
+              value={aiEditText}
+              onChangeText={setAiEditText}
+              placeholder="AI-generated summary will appear here…"
               placeholderTextColor="#9e9e9e"
               scrollEnabled={false}
             />
@@ -394,6 +537,66 @@ const styles = StyleSheet.create({
     color: "#1a1a1a",
     lineHeight: 22,
     minHeight: 200,
+  },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#757575",
+    marginBottom: 8,
+    marginLeft: 2,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  cardSecond: {
+    flexGrow: 0,
+    marginTop: 0,
+  },
+  deadlineRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e0e0e0",
+  },
+  deadlineText: {
+    fontSize: 13,
+    color: "#757575",
+    flex: 1,
+    marginRight: 12,
+  },
+  submitBtn: {
+    backgroundColor: "#22c55e",
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    minWidth: 80,
+    alignItems: "center",
+  },
+  submitBtnDisabled: {
+    backgroundColor: "#86efac",
+  },
+  submitBtnText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  successBanner: {
+    backgroundColor: "#f0fdf4",
+    borderLeftWidth: 4,
+    borderLeftColor: "#22c55e",
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 12,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  successBannerText: {
+    color: "#15803d",
+    fontSize: 13,
   },
   emptyText: {
     color: "#9e9e9e",

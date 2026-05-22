@@ -52,18 +52,18 @@ zk-FYP-v3/
 
 ## Phase 3 — Student Weekly Summary
 
-**Editable summary**
+**Editable summary ✓ Complete**
 - Two input fields in the Student Overview tab:
   - One for editing a copy of the AI-generated weekly summary
   - One for the student-written summary
 - A single Save button saves both fields to history, following the existing
   StudentSummary implementation
 
-**Save with attribution**
+**Save with attribution ✓ Complete**
 - Each save records the username and timestamp of who saved it
 - Full save history is kept for both fields
 
-**Submit feature**
+**Submit feature ✓ Complete**
 - Students can submit the latest saved copy before a deadline
 - Only the most recent submission counts
 - Only students in the group can submit
