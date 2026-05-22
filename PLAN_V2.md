@@ -43,7 +43,7 @@ zk-FYP-v3/
 
 ## Phase 2 — Document & AI Context
 
-**Photos as AI context**
+**Photos as AI context ✓ Complete**
 - Images uploaded or taken in chat are included as context when generating
   the AI Overview summary
 - Only images belonging to the group are accessible — no cross-group leakage

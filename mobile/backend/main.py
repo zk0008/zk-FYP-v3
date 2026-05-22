@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import base64
 import asyncio
 import requests as http_requests
 from datetime import datetime, timedelta
@@ -1578,12 +1579,41 @@ def generate_summary(
                 "source_message_count": existing_summary.source_message_count
             }
 
-    # Build transcript from messages
+    # Build transcript from messages.
+    # Image messages get a placeholder in the text transcript and are base64-encoded
+    # separately so they can be passed to the vision model in step 2.
     transcript_lines = []
+    image_blocks = []  # {mime, data} dicts in conversation order
     for msg in messages:
         timestamp_str = msg.timestamp.strftime("%Y-%m-%d %H:%M")
         username = "AI Bot" if msg.is_AI else (msg.user.username if msg.user else "Unknown")
-        transcript_lines.append(f"[{timestamp_str}] {username}: {msg.content}")
+        msg_type = msg.message_type if msg.message_type else "text"
+
+        if msg_type == "image":
+            # mark where the image appeared in the conversation
+            transcript_lines.append(f"[{timestamp_str}] {username}: [sent an image]")
+
+            # only read files that live inside this group's image folder
+            file_path = Path(msg.content)
+            expected_prefix = f"uploads/images/{group_id}/"
+            if not str(file_path).startswith(expected_prefix):
+                print(f"[Summary] Skipping image outside group directory: {msg.content}")
+                continue
+
+            if not file_path.exists():
+                print(f"[Summary] Skipping missing image file: {msg.content}")
+                continue
+
+            try:
+                ext = file_path.suffix.lower()
+                mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+                with open(file_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                image_blocks.append({"mime": mime, "data": b64})
+            except Exception as e:
+                print(f"[Summary] Warning: could not read image {msg.content}: {e}")
+        else:
+            transcript_lines.append(f"[{timestamp_str}] {username}: {msg.content}")
 
     transcript = "\n".join(transcript_lines)
 
@@ -1627,7 +1657,9 @@ def generate_summary(
                 "  Supervisor Action Plan:\n"
                 "  - Schedule a meeting with the team to discuss resource allocation and clarify roles\n"
                 "  - Review the project timeline and provide guidance on priority tasks\n"
-                "  - Follow up with the client to confirm feedback session details"
+                "  - Follow up with the client to confirm feedback session details\n\n"
+                "For any images shared in the conversation, include a brief description of what the image shows as part of the summary. "
+                "Do not say the image lacks context — describe what you can see."
             )
 
             # if a previous AI summary exists, ask the model to note what has changed
@@ -1647,14 +1679,26 @@ def generate_summary(
                     "Note any differences or areas of growth, and incorporate this into the Supervisor Action Plan."
                 )
 
-            user_prompt = f"Please create a summary of the following group chat conversation:\n\n{transcript}"
-            
-            # Call OpenAI API
+            # text first, then images in the order they appeared in the chat
+            user_content = [
+                {
+                    "type": "text",
+                    "text": f"Please create a summary of the following group chat conversation:\n\n{transcript}"
+                }
+            ]
+            for img in image_blocks:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{img['mime']};base64,{img['data']}"
+                    }
+                })
+
             response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_content}
                 ],
                 max_tokens=1200,
                 temperature=0.7
