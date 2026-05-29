@@ -105,13 +105,24 @@ export default function Groups() {
             {user?.username ?? ""} · {user?.role ?? ""}
           </Text>
         </View>
-        <TouchableOpacity
-          style={styles.logoutBtn}
-          onPress={handleLogout}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          {user?.role === "coordinator" && (
+            <TouchableOpacity
+              style={styles.dashboardBtn}
+              onPress={() => router.push("/dashboard")}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.dashboardText}>Dashboard</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={handleLogout}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.logoutText}>Logout</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <Text style={styles.sectionLabel}>Your chatrooms</Text>
@@ -180,6 +191,24 @@ const styles = StyleSheet.create({
   logoutText: {
     fontSize: 13,
     color: "#d32f2f",
+    fontWeight: "600",
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  dashboardBtn: {
+    backgroundColor: "#ffffff",
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: "#1976d2",
+  },
+  dashboardText: {
+    fontSize: 13,
+    color: "#1976d2",
     fontWeight: "600",
   },
   sectionLabel: {

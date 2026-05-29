@@ -36,8 +36,7 @@ zk-FYP-v3/
 
 **Notification filtering for coordinator and supervisor**
 - Coordinators and supervisors only receive notifications when explicitly @mentioned by their exact username
-- Deferred — not yet implemented
-- No changes to the member list endpoint needed until this is implemented
+- Deferred — coordinator and supervisor have no group_members row so they do not appear in the mention list and do not receive notifications. No implementation needed.
 
 ---
 
@@ -72,25 +71,25 @@ zk-FYP-v3/
 
 ## Phase 4 — Coordinator Dashboard
 
-**Weekly summary view**
+**Weekly summary view ✓ Complete**
 - Coordinators can view the weekly AI summary and latest student summary
   submission for each group
 
-**AI post-analysis**
+**AI post-analysis ✓ Complete**
 - AI-generated comparison between the group chat transcript and the
   student-written summary
 - Shows what was observed in chat vs what students reported
 - Coordinator can select the number of weeks to include in the analysis
 
-**Week range selector**
+**Week range selector ✓ Complete**
 - Select a range of weeks to view summary, student contributions,
   and percentage involvement in chat
 
-**Contribution metrics and visualisations**
+**Contribution metrics and visualisations ✓ Complete**
 - Per-student message count and percentage involvement for the selected range
 - Charts or graphs showing individual and group-level activity
 
-**Group comparison dashboard**
+**Group comparison dashboard ✓ Complete**
 - Compare activity and metrics across all groups
 - Graphical visualisation of group-level engagement and summary submission status
 

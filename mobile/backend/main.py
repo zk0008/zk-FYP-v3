@@ -2104,3 +2104,257 @@ def mark_group_read(
     db.commit()
 
     return {"status": "ok"}
+
+
+
+@app.get("/coordinator/groups/overview")
+def coordinator_groups_overview(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    One-stop overview of every group for the coordinator dashboard.
+    Returns latest AI summary, latest student summary, and total human message count per group.
+    Coordinator-only.
+    """
+    if current_user.role != "coordinator":
+        raise HTTPException(status_code=403, detail="Coordinator access only")
+
+    all_groups = db.query(models.Group).all()
+
+    # reuse the same sort helper that /my-groups already uses
+    def extract_group_number(name):
+        match = re.search(r'\d+', name)
+        return int(match.group()) if match else 999
+
+    sorted_groups = sorted(all_groups, key=lambda g: extract_group_number(g.name))
+
+    result = []
+    for group in sorted_groups:
+        # latest AI summary — group_id here is the string FK (e.g. "group-a")
+        latest_ai = db.query(models.Summary).filter(
+            models.Summary.group_id == group.string_id
+        ).order_by(models.Summary.created_at.desc()).first()
+
+        # latest student summary — also uses string_id FK
+        latest_student = db.query(models.StudentSummary).filter(
+            models.StudentSummary.group_id == group.string_id
+        ).order_by(models.StudentSummary.created_at.desc()).first()
+
+        # message count uses the integer PK — only human messages, no AI
+        total_messages = db.query(models.Message).filter(
+            models.Message.group_id == group.id,
+            models.Message.is_AI == False
+        ).count()
+
+        result.append({
+            "id": group.id,
+            "name": group.name,
+            "string_id": group.string_id,
+            "ai_summary": {
+                "summary_text": latest_ai.summary_text,
+                "created_at": latest_ai.created_at.isoformat(),
+            } if latest_ai else None,
+            "student_summary": {
+                "summary_text": latest_student.summary_text,
+                "is_submitted": latest_student.is_submitted,
+                "submitted_at": latest_student.submitted_at.isoformat() if latest_student.submitted_at else None,
+            } if latest_student else None,
+            "total_messages": total_messages,
+        })
+
+    return result
+
+
+@app.get("/coordinator/groups/{group_id}/contributions")
+def coordinator_group_contributions(
+    group_id: str,
+    weeks: int = Query(4, ge=1, description="How many weeks back to look"),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Per-user message counts for a group over the last N weeks.
+    Useful for spotting who's carrying the conversation and who's gone quiet.
+    Coordinator-only.
+    """
+    if current_user.role != "coordinator":
+        raise HTTPException(status_code=403, detail="Coordinator access only")
+
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    end_dt = datetime.utcnow()
+    start_dt = end_dt - timedelta(weeks=weeks)
+
+    # pull only human messages — ignore AI replies and system messages with no user
+    messages = db.query(models.Message).filter(
+        models.Message.group_id == db_group.id,
+        models.Message.is_AI == False,
+        models.Message.user_id != None,
+        models.Message.timestamp >= start_dt
+    ).all()
+
+    total_messages = len(messages)
+
+    counts: dict[int, int] = {}
+    for msg in messages:
+        counts[msg.user_id] = counts.get(msg.user_id, 0) + 1
+
+    contributions = []
+    for user_id, count in counts.items():
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        username = user.username if user else f"user_{user_id}"
+        percentage = round(count / total_messages * 100, 1) if total_messages > 0 else 0.0
+        contributions.append({
+            "username": username,
+            "message_count": count,
+            "percentage": percentage,
+        })
+
+    contributions.sort(key=lambda x: x["message_count"], reverse=True)
+
+    return {
+        "contributions": contributions,
+        "total_messages": total_messages,
+        "date_range": {
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        },
+    }
+
+
+@app.get("/coordinator/groups/{group_id}/analysis")
+def coordinator_group_analysis(
+    group_id: str,
+    weeks: int = Query(4, ge=1, description="How many weeks back to analyse"),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    AI post-analysis for the coordinator: compares what the group actually
+    discussed in chat against what the students wrote in their summary.
+    Coordinator-only.
+    """
+    if current_user.role != "coordinator":
+        raise HTTPException(status_code=403, detail="Coordinator access only")
+
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    end_dt = datetime.utcnow()
+    start_dt = end_dt - timedelta(weeks=weeks)
+
+    # all messages in the window, oldest first so the transcript reads naturally
+    messages = db.query(models.Message).filter(
+        models.Message.group_id == db_group.id,
+        models.Message.timestamp >= start_dt
+    ).order_by(models.Message.timestamp.asc()).all()
+
+    # no point calling GPT-4o if there's nothing to analyse
+    if not messages:
+        return {
+            "analysis_text": f"No messages found in the last {weeks} week(s). Nothing to analyse.",
+            "generated_at": datetime.utcnow().isoformat(),
+            "date_range": {
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+            },
+        }
+
+    # build a plain-text transcript — image messages get a placeholder
+    transcript_lines = []
+    for msg in messages:
+        ts = msg.timestamp.strftime("%Y-%m-%d %H:%M")
+        if msg.is_AI:
+            sender = "AI Bot"
+        else:
+            sender = msg.user.username if msg.user else "Unknown"
+        if (msg.message_type or "text") == "image":
+            transcript_lines.append(f"[{ts}] {sender}: [sent an image]")
+        else:
+            transcript_lines.append(f"[{ts}] {sender}: {msg.content}")
+    transcript = "\n".join(transcript_lines)
+
+    # latest student summary for this group — may not exist yet
+    latest_student = db.query(models.StudentSummary).filter(
+        models.StudentSummary.group_id == group_id
+    ).order_by(models.StudentSummary.created_at.desc()).first()
+
+    if not openai_client:
+        return {
+            "analysis_text": "Error: OPENAI_API_KEY environment variable not set. Please configure your API key.",
+            "generated_at": datetime.utcnow().isoformat(),
+            "date_range": {
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+            },
+        }
+
+    if latest_student:
+        system_prompt = (
+            "You are an academic coordinator reviewing a student group's progress. "
+            "You have the group's chat transcript and their student-written weekly summary. "
+            "Compare what actually happened in the chat with what the students reported.\n\n"
+            "Structure your response exactly like this (plain text, no markdown headings or bold):\n\n"
+            "What the students reported accurately:\n"
+            "- (bullet points)\n\n"
+            "Gaps — things discussed in chat but missing from the summary:\n"
+            "- (bullet points)\n\n"
+            "Discrepancies — anything in the summary that doesn't match the chat:\n"
+            "- (bullet points, or 'None found' if everything checks out)\n\n"
+            "Coordinator recommendations:\n"
+            "- (2-3 specific, actionable steps)\n\n"
+            f"Student-written summary:\n{latest_student.summary_text}"
+        )
+        # if we have the AI-generated copy the students saw, give that as extra context
+        if latest_student.ai_summary_copy:
+            system_prompt += (
+                f"\n\nAI-generated summary (the copy the students had access to when writing theirs):\n"
+                f"{latest_student.ai_summary_copy}"
+            )
+    else:
+        # no summary submitted — analyse the chat alone and flag the absence
+        system_prompt = (
+            "You are an academic coordinator reviewing a student group's progress. "
+            "You have the group's chat transcript. "
+            "The students have not yet submitted a weekly summary for this group.\n\n"
+            "Based on the chat transcript alone, provide the following (plain text, no markdown headings or bold):\n\n"
+            "What the group has been working on:\n"
+            "- (bullet points)\n\n"
+            "Key discussion points and questions raised:\n"
+            "- (bullet points)\n\n"
+            "Concerns visible from the chat (confusion, lack of progress, dropped threads, etc.):\n"
+            "- (bullet points, or 'None identified' if things look fine)\n\n"
+            "Coordinator recommendations:\n"
+            "- (2-3 specific, actionable steps)\n\n"
+            "Note: no student summary has been submitted yet — flag this as a priority if the deadline is approaching."
+        )
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": f"Chat transcript ({weeks} week(s), {len(messages)} messages):\n\n{transcript}"
+                },
+            ],
+            max_tokens=800,
+            temperature=0.7
+        )
+        analysis_text = response.choices[0].message.content
+    except Exception as e:
+        analysis_text = f"Error: Failed to generate analysis. {str(e)}"
+
+    return {
+        "analysis_text": analysis_text,
+        "generated_at": datetime.utcnow().isoformat(),
+        "date_range": {
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        },
+    }
