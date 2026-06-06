@@ -97,7 +97,6 @@ export default function Groups() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Custom header */}
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>MS3015 Chat</Text>
@@ -125,38 +124,46 @@ export default function Groups() {
         </View>
       </View>
 
-      <Text style={styles.sectionLabel}>Your chatrooms</Text>
+      <View style={styles.contentContainer}>
+        <Text style={styles.sectionLabel}>Your chatrooms</Text>
 
-      {isLoading && (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color="#1976d2" />
-        </View>
-      )}
+        {isLoading && (
+          <View style={styles.center}>
+            <ActivityIndicator size="large" color="#1976d2" />
+          </View>
+        )}
 
-      {!isLoading && error !== null && (
-        <View style={styles.center}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={refresh}>
-            <Text style={styles.retryText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+        {!isLoading && error !== null && (
+          <View style={styles.center}>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={refresh}>
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-      {!isLoading && error === null && (
-        <FlatList
-          data={groups}
-          keyExtractor={(g) => g.id}
-          renderItem={renderGroup}
-          contentContainerStyle={styles.list}
-          ItemSeparatorComponent={Separator}
-        />
-      )}
+        {!isLoading && error === null && (
+          <View style={styles.listShadow}>
+            <FlatList
+              data={groups}
+              keyExtractor={(g) => g.id}
+              renderItem={renderGroup}
+              contentContainerStyle={styles.list}
+              ItemSeparatorComponent={Separator}
+            />
+          </View>
+        )}
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+    backgroundColor: "#ffffff",
+  },
+  contentContainer: {
     flex: 1,
     backgroundColor: "#f0f4f8",
   },
@@ -165,13 +172,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     backgroundColor: "#ffffff",
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#e0e0e0",
+    borderBottomColor: "#e8edf2",
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "700",
     color: "#1a1a1a",
   },
@@ -182,11 +189,14 @@ const styles = StyleSheet.create({
   },
   logoutBtn: {
     backgroundColor: "#f5f5f5",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: "#e8edf2",
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
   },
   logoutText: {
     fontSize: 13,
@@ -200,11 +210,14 @@ const styles = StyleSheet.create({
   },
   dashboardBtn: {
     backgroundColor: "#ffffff",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderWidth: 1,
     borderColor: "#1976d2",
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
   },
   dashboardText: {
     fontSize: 13,
@@ -221,10 +234,19 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginHorizontal: 20,
   },
-  list: {
+  listShadow: {
     marginHorizontal: 16,
+    borderRadius: 14,
     backgroundColor: "#ffffff",
-    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  list: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
     overflow: "hidden",
   },
   row: {
@@ -236,7 +258,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
   },
   groupName: {
-    fontSize: 16,
+    fontSize: 17,
     color: "#1a1a1a",
     fontWeight: "500",
     flex: 1,
@@ -247,20 +269,20 @@ const styles = StyleSheet.create({
   },
   badgeBlue: {
     backgroundColor: "#1976d2",
-    borderRadius: 10,
-    paddingHorizontal: 8,
+    borderRadius: 12,
+    paddingHorizontal: 10,
     paddingVertical: 3,
   },
   badgeOrange: {
     backgroundColor: "#e65100",
-    borderRadius: 10,
-    paddingHorizontal: 8,
+    borderRadius: 12,
+    paddingHorizontal: 10,
     paddingVertical: 3,
   },
   badgeText: {
     color: "#ffffff",
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   center: {
     flex: 1,

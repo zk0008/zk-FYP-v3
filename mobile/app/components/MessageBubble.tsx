@@ -134,21 +134,36 @@ const styles = StyleSheet.create({
   },
   bubble: {
     maxWidth: "80%",
-    borderRadius: 16,
+    borderRadius: 18,
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
   ownBubble: {
     backgroundColor: "#1976d2",
     borderBottomRightRadius: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
+    elevation: 1,
   },
   botBubble: {
     backgroundColor: "#ede7f6",
     borderBottomLeftRadius: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 1,
   },
   otherBubble: {
     backgroundColor: "#ffffff",
     borderBottomLeftRadius: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 1,
   },
   taggedBubble: {
     // yellow tint so the user spots their @mention at a glance
@@ -176,7 +191,7 @@ const styles = StyleSheet.create({
   imageThumbnail: {
     width: 200,
     height: 200,
-    borderRadius: 16,
+    borderRadius: 18,
   },
   imageThumbnailOwn: {
     // matches ownBubble — slightly flattened bottom-right corner

@@ -363,7 +363,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#e0e0e0",
+    borderBottomColor: "#e8edf2",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
   headerTitle: {
     fontSize: 16,
@@ -376,11 +381,13 @@ const styles = StyleSheet.create({
   },
   historyBtn: {
     backgroundColor: "#f5f5f5",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: "#e8edf2",
+    minHeight: 44,
+    justifyContent: "center",
     alignItems: "center",
   },
   historyBtnText: {
@@ -390,10 +397,12 @@ const styles = StyleSheet.create({
   },
   refreshBtn: {
     backgroundColor: "#1976d2",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
     minWidth: 80,
+    minHeight: 44,
+    justifyContent: "center",
     alignItems: "center",
   },
   refreshBtnDisabled: {
@@ -432,7 +441,7 @@ const styles = StyleSheet.create({
   },
   retryBtn: {
     backgroundColor: "#1976d2",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 24,
     paddingVertical: 10,
   },
@@ -447,12 +456,12 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: "#ffffff",
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 16,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
     elevation: 2,
   },
   metaText: {
@@ -470,7 +479,7 @@ const styles = StyleSheet.create({
   },
   emptyCard: {
     backgroundColor: "#ffffff",
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 32,
     alignItems: "center",
   },
@@ -481,13 +490,13 @@ const styles = StyleSheet.create({
   },
   prevCard: {
     backgroundColor: "#ffffff",
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 16,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
   prevHeader: {
     flexDirection: "row",
@@ -500,7 +509,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#757575",
     textTransform: "uppercase",
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
   },
   prevMeta: {
     fontSize: 12,
@@ -523,7 +532,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#e0e0e0",
+    borderBottomColor: "#e8edf2",
   },
   modalTitle: {
     fontSize: 16,
@@ -532,11 +541,11 @@ const styles = StyleSheet.create({
   },
   modalCloseBtn: {
     backgroundColor: "#f5f5f5",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: "#e8edf2",
   },
   modalCloseBtnText: {
     fontSize: 13,
@@ -547,7 +556,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 16,
     backgroundColor: "#ffffff",
-    borderRadius: 12,
+    borderRadius: 14,
     overflow: "hidden",
   },
   separator: {

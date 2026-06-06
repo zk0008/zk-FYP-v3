@@ -308,13 +308,15 @@ export default function Documents() {
 
       {/* Document list */}
       {!isLoading && fetchError === null && docs.length > 0 && (
-        <FlatList
-          data={docs}
-          keyExtractor={(d) => String(d.id)}
-          renderItem={renderDoc}
-          contentContainerStyle={styles.list}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-        />
+        <View style={styles.listShadow}>
+          <FlatList
+            data={docs}
+            keyExtractor={(d) => String(d.id)}
+            renderItem={renderDoc}
+            contentContainerStyle={styles.list}
+            ItemSeparatorComponent={() => <View style={styles.separator} />}
+          />
+        </View>
       )}
     </View>
   );
@@ -330,7 +332,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#e0e0e0",
+    borderBottomColor: "#e8edf2",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
   uploadBtn: {
     flexDirection: "row",
@@ -379,7 +386,7 @@ const styles = StyleSheet.create({
   },
   retryBtn: {
     backgroundColor: "#1976d2",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 24,
     paddingVertical: 10,
   },
@@ -393,12 +400,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: "center",
   },
-  list: {
+  listShadow: {
     marginHorizontal: 16,
     marginTop: 16,
     marginBottom: 16,
+    borderRadius: 14,
     backgroundColor: "#ffffff",
-    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  list: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
     overflow: "hidden",
   },
   separator: {
@@ -431,9 +447,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   actionBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
+    width: 44,
+    height: 44,
+    borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -448,7 +464,7 @@ const styles = StyleSheet.create({
   },
   actionBtnText: {
     color: "#ffffff",
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: "600",
   },
 });

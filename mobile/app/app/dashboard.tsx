@@ -7,7 +7,6 @@ import {
   Platform,
   StyleSheet,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, Stack } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useEffect, useState } from "react";
@@ -220,23 +219,25 @@ export default function Dashboard() {
   const maxMessages = Math.max(...overview.map((g) => g.total_messages), 1);
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* tell Expo Router's Stack navigator to hide its own header for this screen */}
-      <Stack.Screen options={{ headerShown: false }} />
-
-      {/* ── Header ──────────────────────────────────────────────── */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backBtn}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Coordinator Dashboard</Text>
-        {/* spacer keeps the title visually centred */}
-        <View style={styles.headerSpacer} />
-      </View>
+    <View style={styles.container}>
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title: "Coordinator Dashboard",
+          headerStyle: { backgroundColor: "#ffffff" },
+          headerTitleStyle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a" },
+          headerShadowVisible: true,
+          headerLeft: () => (
+            <TouchableOpacity
+              onPress={() => router.navigate("/groups")}
+              style={styles.backBtn}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.backBtnText} numberOfLines={1}>‹ Groups</Text>
+            </TouchableOpacity>
+          ),
+        }}
+      />
 
       <ScrollView contentContainerStyle={styles.scroll}>
 
@@ -546,7 +547,7 @@ export default function Dashboard() {
 
         <View style={{ height: 32 }} />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -555,34 +556,14 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#f0f4f8",
   },
-  header: {
+  backBtn: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#ffffff",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e0e0e0",
   },
-  backBtn: {
-    width: 64,
-  },
-  backText: {
+  backBtnText: {
     color: "#1976d2",
     fontSize: 14,
     fontWeight: "600",
-  },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: "#1e293b",
-    textAlign: "center",
-    flex: 1,
-  },
-  // matches backBtn width so title sits in the true centre
-  headerSpacer: {
-    width: 64,
   },
   scroll: {
     paddingHorizontal: 16,
@@ -607,9 +588,14 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: "#ffffff",
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 16,
     marginBottom: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
   mutedText: {
     fontSize: 13,
@@ -629,13 +615,15 @@ const styles = StyleSheet.create({
   },
   deadlineText: {
     fontSize: 14,
-    color: "#1e293b",
+    color: "#1a1a1a",
     marginBottom: 12,
   },
   primaryBtn: {
     backgroundColor: "#1976d2",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingVertical: 11,
+    minHeight: 44,
+    justifyContent: "center",
     alignItems: "center",
   },
   btnDisabled: {
@@ -650,7 +638,7 @@ const styles = StyleSheet.create({
   pickerSelectedText: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#1e293b",
+    color: "#1a1a1a",
     marginBottom: 10,
   },
   // side-by-side "Select Date" / "Select Time" buttons on Android
@@ -666,7 +654,7 @@ const styles = StyleSheet.create({
   groupName: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#1e293b",
+    color: "#1a1a1a",
     marginBottom: 2,
   },
   groupCardRight: {
@@ -712,15 +700,18 @@ const styles = StyleSheet.create({
   },
   weekBtn: {
     borderWidth: 1,
-    borderColor: "#e0e0e0",
-    borderRadius: 8,
+    borderColor: "#e8edf2",
+    borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 6,
     backgroundColor: "#ffffff",
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
   },
   weekBtnActive: {
-    borderColor: "#1976d2",
-    backgroundColor: "#1976d2",
+    borderColor: "#1565c0",
+    backgroundColor: "#1565c0",
   },
   weekBtnText: {
     fontSize: 13,
@@ -738,19 +729,19 @@ const styles = StyleSheet.create({
   barLabel: {
     width: 88,
     fontSize: 13,
-    color: "#1e293b",
+    color: "#1a1a1a",
   },
   barTrack: {
     flex: 1,
     height: 18,
     backgroundColor: "#f0f4f8",
-    borderRadius: 4,
+    borderRadius: 6,
     overflow: "hidden",
   },
   barFill: {
     height: "100%",
     backgroundColor: "#1976d2",
-    borderRadius: 4,
+    borderRadius: 6,
   },
   barFillAmber: {
     backgroundColor: "#f59e0b",
@@ -770,8 +761,10 @@ const styles = StyleSheet.create({
   outlineBtn: {
     borderWidth: 1,
     borderColor: "#1976d2",
-    borderRadius: 8,
+    borderRadius: 10,
     paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#ffffff",
   },
@@ -787,14 +780,14 @@ const styles = StyleSheet.create({
   },
   analysisCard: {
     backgroundColor: "#f8fafc",
-    borderRadius: 8,
+    borderRadius: 10,
     padding: 12,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: "#e8edf2",
   },
   analysisText: {
     fontSize: 13,
-    color: "#1e293b",
+    color: "#1a1a1a",
     lineHeight: 20,
   },
 });

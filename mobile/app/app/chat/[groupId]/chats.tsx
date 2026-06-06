@@ -63,8 +63,6 @@ export default function Chats() {
   // so useLocalSearchParams (scoped to the current tab screen) doesn't see it
   const { groupId } = useGlobalSearchParams<{ groupId: string }>();
   const { token, user } = useAuth();
-  // height of the Stack header above this screen — KAV needs this so iOS calculates
-  // the keyboard offset from the right baseline (bottom of header, not top of screen)
   const headerHeight = useHeaderHeight();
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -549,16 +547,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: "#e0e0e0",
+    borderTopColor: "#e8edf2",
     gap: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
   input: {
     flex: 1,
     minHeight: 40,
     maxHeight: 120,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
-    borderRadius: 20,
+    borderColor: "#e8edf2",
+    borderRadius: 22,
     paddingHorizontal: 14,
     paddingVertical: 8,
     fontSize: 15,
@@ -566,9 +569,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#fafafa",
   },
   sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: "#1976d2",
     justifyContent: "center",
     alignItems: "center",
@@ -586,18 +589,18 @@ const styles = StyleSheet.create({
     marginVertical: 10,
   },
   dateSeparatorText: {
-    backgroundColor: "#d0d8e4",
-    color: "#4a4a4a",
-    fontSize: 11,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 10,
+    backgroundColor: "#dde3ec",
+    color: "#4a5568",
+    fontSize: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+    borderRadius: 12,
     overflow: "hidden",
   },
   attachBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: "#e8edf2",
     justifyContent: "center",
     alignItems: "center",
@@ -610,14 +613,14 @@ const styles = StyleSheet.create({
   mentionPicker: {
     backgroundColor: "#ffffff",
     borderTopWidth: 1,
-    borderTopColor: "#e0e0e0",
+    borderTopColor: "#e8edf2",
     maxHeight: 160,
   },
   mentionItem: {
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#e0e0e0",
+    borderBottomColor: "#e8edf2",
   },
   mentionItemText: {
     fontSize: 14,

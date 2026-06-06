@@ -1,5 +1,5 @@
 import { Tabs, Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { TouchableOpacity, Text } from "react-native";
+import { TouchableOpacity, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 export default function GroupTabLayout() {
@@ -9,16 +9,20 @@ export default function GroupTabLayout() {
 
   return (
     <>
-      {/* Tells the parent Stack (chat/_layout.tsx) what to show in the header */}
       <Stack.Screen
         options={{
+          headerShown: true,
           title: groupName,
           headerStyle: { backgroundColor: "#ffffff" },
-          headerTintColor: "#1976d2",
-          headerTitleStyle: { fontWeight: "700", color: "#1a1a1a" },
+          headerTitleStyle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a" },
+          headerShadowVisible: true,
           headerLeft: () => (
-            <TouchableOpacity onPress={() => router.navigate("/groups")} style={{ paddingRight: 8 }}>
-              <Text style={{ color: "#1976d2", fontSize: 16 }}>‹ Groups</Text>
+            <TouchableOpacity
+              onPress={() => router.navigate("/groups")}
+              style={styles.backBtn}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.backBtnText} numberOfLines={1}>‹ Groups</Text>
             </TouchableOpacity>
           ),
         }}
@@ -30,7 +34,7 @@ export default function GroupTabLayout() {
           tabBarInactiveTintColor: "#9e9e9e",
           tabBarStyle: {
             backgroundColor: "#ffffff",
-            borderTopColor: "#e0e0e0",
+            borderTopColor: "#e8edf2",
           },
           tabBarLabelStyle: {
             fontSize: 11,
@@ -42,7 +46,6 @@ export default function GroupTabLayout() {
           name="chats"
           options={{
             title: "Chats",
-            // hide the tab bar when the keyboard opens so the input is never covered
             tabBarHideOnKeyboard: true,
             tabBarIcon: ({ color }) => <Ionicons name="chatbubbles-outline" size={22} color={color} />,
           }}
@@ -72,3 +75,15 @@ export default function GroupTabLayout() {
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  backBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  backBtnText: {
+    color: "#1976d2",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+});
