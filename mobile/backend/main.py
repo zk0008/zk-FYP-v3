@@ -3,13 +3,14 @@ import re
 import json
 import base64
 import asyncio
+import logging
 import requests as http_requests
 from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from openai import OpenAI
 from pypdf import PdfReader
 from docx import Document as DocxDocument
@@ -313,7 +314,7 @@ groups = {
 
 class NewMessage(BaseModel):
     sender: str
-    text: str
+    text: str = Field(max_length=4000)
 
 
 class LoginRequest(BaseModel):
@@ -578,7 +579,9 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
             db.commit()
 
         except Exception as e:
-            error_message = f"Error: Failed to get AI response. {str(e)}"
+            # hide internal error details from the chat
+            logging.error("AI reply failed for group %s: %s", db_group_id, str(e))
+            error_message = "Error: Failed to get AI response. Please try again later."
             if username:
                 error_message = f"@{username}: {error_message}"
             ai_message = models.Message(
@@ -592,7 +595,7 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
 
     except Exception as e:
         db.rollback()
-        print(f"Error saving AI reply: {str(e)}")
+        logging.error("Error saving AI reply: %s", str(e))
     finally:
         db.close()
 
@@ -619,6 +622,11 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
     try:
         current_user = db.query(models.User).filter(models.User.username == username).first()
         if not current_user:
+            await websocket.close(code=4008)
+            return
+
+        # Verify the user is actually a member of this group before accepting.
+        if not check_group_access(group_id, current_user, db):
             await websocket.close(code=4008)
             return
 
@@ -968,13 +976,6 @@ def get_my_groups(
         raise HTTPException(status_code=403, detail="Unknown user role")
 
 
-@app.get("/groups")
-def list_groups(db: Session = Depends(get_db)):
-    """List all groups (legacy endpoint - frontend uses /my-groups)"""
-    all_groups = db.query(models.Group).all()
-    return [{"id": group.string_id, "name": group.name} for group in all_groups]
-
-
 def check_group_access(group_id: str, current_user: models.User, db: Session) -> bool:
     """
     Check if the current user has access to the specified group.
@@ -1164,9 +1165,16 @@ async def upload_image_message(
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image must be 5 MB or smaller")
 
+    # JPEG and PNG magic bytes
+    is_jpeg = content[:3] == b"\xff\xd8\xff"
+    is_png = content[:8] == b"\x89PNG\r\n\x1a\n"
+    if not (is_jpeg or is_png):
+        raise HTTPException(status_code=400, detail="File content does not match a valid JPEG or PNG image")
+
     # save to uploads/images/{group_id}/{timestamp}_{filename}
+    # strip any directory components from the client-supplied filename
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_filename = f"{ts}_{file.filename}"
+    safe_filename = f"{ts}_{os.path.basename(file.filename)}"
     file_path = IMAGE_STORAGE_DIR / group_id / safe_filename
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1174,7 +1182,8 @@ async def upload_image_message(
         with open(file_path, "wb") as f:
             f.write(content)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save image: {str(e)}")
+        logging.error("Failed to save image: %s", str(e))
+        raise HTTPException(status_code=500, detail="Failed to save image.")
 
     new_message = models.Message(
         group_id=db_group.id,
@@ -1253,7 +1262,10 @@ def get_image_message(
     if not msg:
         raise HTTPException(status_code=404, detail="Image message not found")
 
-    file_path = Path(msg.content)
+    # resolve() collapses any .. or symlinks so is_relative_to() can't be tricked
+    file_path = Path(msg.content).resolve()
+    if not file_path.is_relative_to(IMAGE_STORAGE_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Image file not found on disk")
 
@@ -1308,7 +1320,6 @@ def list_documents(
             "id": doc.id,
             "filename": doc.filename,
             "uploaded_at": uploaded_at_iso,
-            "file_path": doc.stored_path,
             "uploaded_by": uploader_name,
             "file_size": file_size,
         })
@@ -1339,21 +1350,38 @@ async def upload_document(
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=400, detail="Only PDF, DOC, and DOCX files are allowed")
     
-    # Generate unique filename to avoid conflicts
+    # Generate unique filename to avoid conflicts.
+    # strip any directory components from the client-supplied filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_filename = f"{timestamp}_{file.filename}"
+    safe_filename = f"{timestamp}_{os.path.basename(file.filename)}"
     file_path = PDF_STORAGE_DIR / group_id / safe_filename
     
     # Create group-specific directory
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
+    # Read content first so we can check size before touching disk
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File must be 20 MB or smaller")
+
+    # PDF, DOCX (ZIP), and legacy DOC magic bytes
+    is_pdf = content[:4] == b"%PDF"
+    is_docx = content[:2] == b"PK"
+    is_doc = content[:4] == b"\xd0\xcf\x11\xe0"
+    if file_ext == ".pdf" and not is_pdf:
+        raise HTTPException(status_code=400, detail="File content does not match a valid PDF")
+    if file_ext == ".docx" and not is_docx:
+        raise HTTPException(status_code=400, detail="File content does not match a valid DOCX file")
+    if file_ext == ".doc" and not is_doc:
+        raise HTTPException(status_code=400, detail="File content does not match a valid DOC file")
+
     # Save file to disk
     try:
         with open(file_path, "wb") as f:
-            content = await file.read()
             f.write(content)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+        logging.error("Failed to save file: %s", str(e))
+        raise HTTPException(status_code=500, detail="Failed to save file.")
     
     # Store metadata in database
     document = models.Document(
@@ -1374,34 +1402,34 @@ async def upload_document(
             reader = PdfReader(file_path)
             pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
             if pdf_text.strip():
-                index_document(group_id, file.filename, pdf_text)
+                # Use safe_filename (timestamped) so two uploads of "report.pdf" don't
+                # clobber each other's ChromaDB embeddings.
+                index_document(group_id, safe_filename, pdf_text)
         except Exception as e:
             # Don't block the upload if indexing fails — just log it
-            print(f"Warning: failed to index {file.filename} for RAG: {str(e)}")
+            logging.warning("Failed to index %s for RAG: %s", file.filename, str(e))
     elif file_ext == '.docx':
         try:
             reader = DocxDocument(file_path)
             doc_text = "\n".join(p.text for p in reader.paragraphs if p.text.strip())
             if doc_text.strip():
-                index_document(group_id, file.filename, doc_text)
+                index_document(group_id, safe_filename, doc_text)
         except Exception as e:
-            print(f"Warning: failed to index {file.filename} for RAG: {str(e)}")
+            logging.warning("Failed to index %s for RAG: %s", file.filename, str(e))
     # .doc files land here — stored on disk, skipped for indexing since python-docx can't parse the old binary format
 
     # Get file size
     file_size = os.path.getsize(file_path)
     
-    # Return in API format: {id, filename, uploaded_at, file_path, uploaded_by, file_size}
     # Ensure UTC timestamp is marked with 'Z' suffix
     uploaded_at_iso = document.created_at.isoformat()
     if not uploaded_at_iso.endswith('Z'):
         uploaded_at_iso = uploaded_at_iso + 'Z'
-    
+
     return {
         "id": document.id,
         "filename": document.filename,
         "uploaded_at": uploaded_at_iso,
-        "file_path": document.stored_path,
         "uploaded_by": current_user.username,
         "file_size": file_size,
     }
@@ -1469,15 +1497,22 @@ def delete_document(
     
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    
+
+    # Students can only delete their own uploads; supervisors and coordinators can delete any.
+    is_uploader = document.uploaded_by_user_id == current_user.id
+    is_privileged = current_user.role in ("supervisor", "coordinator")
+    if not (is_uploader or is_privileged):
+        raise HTTPException(status_code=403, detail="Only the uploader or a supervisor/coordinator can delete this document")
+
     # Delete the file from file system
-    file_path = Path(document.stored_path)
-    if file_path.exists():
+    file_path = Path(document.stored_path).resolve()
+    if not file_path.is_relative_to(PDF_STORAGE_DIR.resolve()):
+        logging.warning("Skipping deletion of file outside storage directory: %s", file_path)
+    elif file_path.exists():
         try:
             file_path.unlink()
         except Exception as e:
-            # Log error but continue with database deletion
-            print(f"Error deleting file {file_path}: {str(e)}")
+            logging.error("Error deleting file %s: %s", file_path, str(e))
     
     # Delete the document from database
     db.delete(document)
@@ -1505,7 +1540,10 @@ def get_summary(
     # Check authorization (coordinator or supervisor only, no students)
     if not check_summary_access(group_id, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this group")
-    
+
+    if range not in ("weekly", "full"):
+        raise HTTPException(status_code=400, detail="range must be 'weekly' or 'full'")
+
     # Query for the latest summary matching the group_id and range_type
     summary = db.query(models.Summary).filter(
         models.Summary.group_id == group_id,
@@ -1557,7 +1595,10 @@ def generate_summary(
     # Check authorization (coordinator or group member)
     if not check_summary_access(group_id, current_user, db):
         raise HTTPException(status_code=403, detail="Access denied to this group")
-    
+
+    if range not in ("weekly", "full"):
+        raise HTTPException(status_code=400, detail="range must be 'weekly' or 'full'")
+
     # Handle different range types
     if range == "weekly":
         # Get messages from the last 7 days
@@ -1623,14 +1664,14 @@ def generate_summary(
             transcript_lines.append(f"[{timestamp_str}] {username}: [sent an image]")
 
             # only read files that live inside this group's image folder
-            file_path = Path(msg.content)
-            expected_prefix = f"uploads/images/{group_id}/"
-            if not str(file_path).startswith(expected_prefix):
-                print(f"[Summary] Skipping image outside group directory: {msg.content}")
+            # resolve() collapses any .. so a crafted DB value can't escape the group dir
+            file_path = Path(msg.content).resolve()
+            if not file_path.is_relative_to((IMAGE_STORAGE_DIR / group_id).resolve()):
+                logging.warning("Skipping image outside group directory: %s", msg.content)
                 continue
 
             if not file_path.exists():
-                print(f"[Summary] Skipping missing image file: {msg.content}")
+                logging.warning("Skipping missing image file: %s", msg.content)
                 continue
 
             try:
@@ -1640,7 +1681,7 @@ def generate_summary(
                     b64 = base64.b64encode(f.read()).decode("utf-8")
                 image_blocks.append({"mime": mime, "data": b64})
             except Exception as e:
-                print(f"[Summary] Warning: could not read image {msg.content}: {e}")
+                logging.warning("Could not read image %s: %s", msg.content, str(e))
         else:
             transcript_lines.append(f"[{timestamp_str}] {username}: {msg.content}")
 
@@ -2169,7 +2210,7 @@ def coordinator_groups_overview(
 @app.get("/coordinator/groups/{group_id}/contributions")
 def coordinator_group_contributions(
     group_id: str,
-    weeks: int = Query(4, ge=1, description="How many weeks back to look"),
+    weeks: int = Query(4, ge=1, le=52, description="How many weeks back to look"),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -2228,7 +2269,7 @@ def coordinator_group_contributions(
 @app.get("/coordinator/groups/{group_id}/analysis")
 def coordinator_group_analysis(
     group_id: str,
-    weeks: int = Query(4, ge=1, description="How many weeks back to analyse"),
+    weeks: int = Query(4, ge=1, le=52, description="How many weeks back to analyse"),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):

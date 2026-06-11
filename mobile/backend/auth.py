@@ -10,8 +10,11 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# Get JWT configuration from environment
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-this-in-production")
+# Get JWT configuration from environment.
+# No fallback — running without a real secret means all tokens are forgeable.
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not JWT_SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY environment variable is not set")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 # Configure password hashing with bcrypt

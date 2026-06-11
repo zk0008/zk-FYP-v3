@@ -388,7 +388,9 @@ export default function Chats() {
                       message_type={msg.message_type}
                       image_url={
                         msg.image_url
-                          ? `${API_BASE}${msg.image_url}?token=${token ?? ""}`
+                          ? // Token goes in the query string because React Native's Image
+                            // component can't set custom request headers — no better option here.
+                            `${API_BASE}${msg.image_url}?token=${token ?? ""}`
                           : undefined
                       }
                     />

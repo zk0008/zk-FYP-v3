@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 
@@ -43,14 +43,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const stored = await AsyncStorage.getItem("jwt_token");
+        const stored = await SecureStore.getItemAsync("jwt_token");
         if (stored && !jwtIsExpired(stored)) {
-          const storedUser = await AsyncStorage.getItem("user");
+          const storedUser = await SecureStore.getItemAsync("user");
           setToken(stored);
           setUser(storedUser ? JSON.parse(storedUser) : null);
         } else if (stored) {
           // token exists but is expired — clean up
-          await AsyncStorage.multiRemove(["jwt_token", "user"]);
+          await SecureStore.deleteItemAsync("jwt_token");
+          await SecureStore.deleteItemAsync("user");
         }
       } catch {
         // storage read failed — start unauthenticated
@@ -81,15 +82,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!meRes.ok) throw new Error("Failed to load user info");
     const userData: User = await meRes.json();
 
-    await AsyncStorage.setItem("jwt_token", access_token);
-    await AsyncStorage.setItem("user", JSON.stringify(userData));
+    await SecureStore.setItemAsync("jwt_token", access_token);
+    await SecureStore.setItemAsync("user", JSON.stringify(userData));
 
     setToken(access_token);
     setUser(userData);
   };
 
   const logout = async () => {
-    await AsyncStorage.multiRemove(["jwt_token", "user"]);
+    await SecureStore.deleteItemAsync("jwt_token");
+    await SecureStore.deleteItemAsync("user");
     setToken(null);
     setUser(null);
   };

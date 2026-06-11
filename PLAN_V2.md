@@ -95,7 +95,7 @@ zk-FYP-v3/
 
 ---
 
-## Phase 5 — Security Audit
+## Phase 5 — Security Audit ✓ Complete
 
 Verification pass before any distribution or deployment.
 
@@ -105,6 +105,22 @@ Verification pass before any distribution or deployment.
 - No sensitive data leaked in API responses
 - WebSocket token validation
 - Cross-group data isolation
+
+**Fixed:**
+- WebSocket group membership check enforced before connection accepted
+- Unauthenticated GET /groups endpoint removed
+- Path traversal fixed in file upload filenames
+- File type validated against magic bytes not just filename extension
+- Document upload size limit added (20 MB)
+- JWT secret fallback removed — startup fails if unset
+- Raw exception strings replaced with generic messages to clients
+- Server filesystem paths removed from document list responses
+- weeks query param capped at 52
+- Message length capped at 4000 characters
+- range param validated against allowlist
+- Document deletion restricted to uploader, supervisor, or coordinator
+- RAG filename collision fixed
+- JWT storage migrated to SecureStore
 
 ---
 
