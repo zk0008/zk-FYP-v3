@@ -18,12 +18,12 @@ zk-FYP-v3/
 
 ---
 
-## Phase 1 — Deadline for Submission
+## Phase 1 — Deadline for Submission ✓ Complete
 
-**Simpler date picker**
+**Simpler date picker ✓ Complete**
 - Replace the current date and time picker with a simpler implementation
 
-**Submission frequency**
+**Submission frequency ✓ Complete**
 - Coordinator sets the submission frequency — weekly, biweekly, or a specific date
 - Weekly: deadline repeats every selected day of the week (e.g. every Friday)
 - Biweekly: deadline repeats every two weeks on the selected day
@@ -31,11 +31,11 @@ zk-FYP-v3/
 - When a deadline passes, a new submission window opens automatically
 - All submission history remains visible to all users — existing history flow unchanged
 
-**Late submission**
+**Late submission ✓ Complete**
 - Students can still submit after the deadline has passed
 - Late submissions are flagged and visible to all users including students
 
-**Hard deadline**
+**Hard deadline ✓ Complete**
 - Coordinator can enable a hard deadline option
 - When enabled, no submissions are accepted after the deadline date
 

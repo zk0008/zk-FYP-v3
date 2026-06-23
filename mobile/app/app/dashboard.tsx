@@ -1,6 +1,7 @@
 import {
   View,
   Text,
+  TextInput,
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
@@ -13,6 +14,12 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../hooks/useAuth";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
+
+const PICKER_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function formatPickerDisplay(date: Date, time: string): string {
+  return `${date.getDate()} ${PICKER_MONTHS[date.getMonth()]} ${date.getFullYear()}, ${time || "--:--"}`;
+}
 
 // +8 hours to convert UTC to SGT
 function toSGT(iso: string): string {
@@ -35,6 +42,7 @@ type GroupOverview = {
     summary_text: string;
     is_submitted: boolean;
     submitted_at: string | null;
+    is_late: boolean;
   } | null;
   total_messages: number;
 };
@@ -58,9 +66,13 @@ export default function Dashboard() {
   const router = useRouter();
 
   const [deadline, setDeadline] = useState<{
-    deadline_dt: string;
+    next_deadline_dt: string;
+    frequency: string;
+    is_hard: boolean;
     set_by: string | null;
   } | null>(null);
+  const [frequency, setFrequency] = useState<"once" | "weekly" | "biweekly">("once");
+  const [isHard, setIsHard] = useState(false);
   // default to tomorrow at 23:59 in device local time — sensible starting point for a deadline
   const [pickerDate, setPickerDate] = useState<Date>(() => {
     const d = new Date();
@@ -68,9 +80,10 @@ export default function Dashboard() {
     d.setHours(23, 59, 0, 0);
     return d;
   });
-  // Android only — pickers are modal dialogs, so we track whether each one is open
+  // Android only — date picker is a modal dialog, so track whether it's open
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [timeText, setTimeText] = useState("23:59");
+  const [timeError, setTimeError] = useState("");
   const [deadlineStatus, setDeadlineStatus] = useState<
     "idle" | "saving" | "success" | "error"
   >("idle");
@@ -116,7 +129,14 @@ export default function Dashboard() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setDeadline(data))
+      .then((data) => {
+        setDeadline(data);
+        // seed the pill selectors so they reflect the current deadline on reload
+        if (data) {
+          setIsHard(data.is_hard ?? false);
+          setFrequency(data.frequency ?? "once");
+        }
+      })
       .catch(() => {});
   }
 
@@ -186,15 +206,34 @@ export default function Dashboard() {
   async function handleSetDeadline() {
     setDeadlineStatus("saving");
     setDeadlineError("");
+    setTimeError("");
+
+    // validate the typed time before building the final datetime
+    const [hStr, mStr] = timeText.split(":");
+    const h = parseInt(hStr ?? "", 10);
+    const m = parseInt(mStr ?? "", 10);
+    if (!/^\d{2}:\d{2}$/.test(timeText) || h < 0 || h > 23 || m < 0 || m > 59) {
+      setTimeError("Enter a valid time as HH:MM (e.g. 23:59)");
+      setDeadlineStatus("idle");
+      return;
+    }
+
+    // merge the typed time into the date chosen by the date picker
+    const merged = new Date(pickerDate);
+    merged.setHours(h, m, 0, 0);
+
     try {
-      // pickerDate is a JS Date — toISOString() is always the correct UTC equivalent
       const res = await fetch(`${API_BASE}/deadline`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ deadline_dt: pickerDate.toISOString() }),
+        body: JSON.stringify({
+          start_dt: merged.toISOString(),
+          frequency,
+          is_hard: isHard,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "Unknown error" }));
@@ -248,55 +287,60 @@ export default function Dashboard() {
             <Text style={styles.deadlineText}>
               Current:{" "}
               <Text style={{ fontWeight: "600" }}>
-                {toSGT(deadline.deadline_dt)}
+                {toSGT(deadline.next_deadline_dt)}
               </Text>
-              {deadline.set_by ? `  · set by ${deadline.set_by}` : ""}
+              {"  ·  "}
+              <Text style={{ color: deadline.is_hard ? "#d32f2f" : "#1976d2" }}>
+                {deadline.is_hard ? "Hard deadline" : "Soft deadline"}
+              </Text>
+              {deadline.frequency !== "once" ? `  ·  ${deadline.frequency}` : ""}
+              {deadline.set_by ? `  ·  set by ${deadline.set_by}` : ""}
             </Text>
           ) : (
             <Text style={styles.mutedText}>No deadline set yet.</Text>
           )}
-          {/* show what the coordinator is about to set, always in SGT */}
+
+          {/* show the selected date + typed time before the coordinator saves */}
           <Text style={styles.pickerSelectedText}>
-            Set to: {toSGT(pickerDate.toISOString())}
+            Set to: {formatPickerDisplay(pickerDate, timeText)}
           </Text>
 
-          {/* iOS: render both pickers inline as spinning wheels */}
-          {Platform.OS === "ios" && (
-            <>
+          {/* compact date picker + time text input side by side */}
+          <View style={styles.pickerRow}>
+            {Platform.OS === "ios" ? (
               <DateTimePicker
                 value={pickerDate}
                 mode="date"
-                display="spinner"
-                onChange={(_e, date) => { if (date) setPickerDate(date); }}
+                display="compact"
+                onChange={(_e, date) => {
+                  if (date) {
+                    const next = new Date(pickerDate);
+                    next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+                    setPickerDate(next);
+                  }
+                }}
+                style={styles.datePickerIOS}
               />
-              <DateTimePicker
-                value={pickerDate}
-                mode="time"
-                display="spinner"
-                onChange={(_e, date) => { if (date) setPickerDate(date); }}
-              />
-            </>
-          )}
-
-          {/* Android: pickers are modal dialogs — show buttons to trigger each one */}
-          {Platform.OS === "android" && (
-            <View style={styles.pickerBtnRow}>
+            ) : (
               <TouchableOpacity
-                style={[styles.outlineBtn, { flex: 1, marginRight: 6 }]}
+                style={[styles.outlineBtn, { flex: 1 }]}
                 onPress={() => setShowDatePicker(true)}
                 activeOpacity={0.8}
               >
                 <Text style={styles.outlineBtnText}>Select Date</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.outlineBtn, { flex: 1 }]}
-                onPress={() => setShowTimePicker(true)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.outlineBtnText}>Select Time</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+            )}
+            <TextInput
+              style={[styles.timeInput, timeError ? styles.timeInputError : undefined]}
+              value={timeText}
+              onChangeText={(v) => { setTimeText(v); if (timeError) setTimeError(""); }}
+              placeholder="23:59"
+              placeholderTextColor="#9e9e9e"
+              keyboardType="numbers-and-punctuation"
+              maxLength={5}
+            />
+          </View>
+          {timeError ? <Text style={styles.errorText}>{timeError}</Text> : null}
 
           {/* Android date picker modal — only mounted when triggered */}
           {Platform.OS === "android" && showDatePicker && (
@@ -306,22 +350,54 @@ export default function Dashboard() {
               display="default"
               onChange={(_e, date) => {
                 setShowDatePicker(false);
-                if (date) setPickerDate(date);
+                if (date) {
+                  const next = new Date(pickerDate);
+                  next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+                  setPickerDate(next);
+                }
               }}
             />
           )}
-          {/* Android time picker modal */}
-          {Platform.OS === "android" && showTimePicker && (
-            <DateTimePicker
-              value={pickerDate}
-              mode="time"
-              display="default"
-              onChange={(_e, date) => {
-                setShowTimePicker(false);
-                if (date) setPickerDate(date);
-              }}
-            />
-          )}
+
+          {/* Frequency selector — pill buttons matching the week selector style */}
+          <Text style={styles.settingLabel}>Frequency</Text>
+          <View style={styles.pillRow}>
+            {(["once", "weekly", "biweekly"] as const).map((opt) => (
+              <TouchableOpacity
+                key={opt}
+                style={[styles.pill, frequency === opt && styles.pillActive]}
+                onPress={() => setFrequency(opt)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.pillText, frequency === opt && styles.pillTextActive]}>
+                  {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Hard/Soft deadline pill selector */}
+          <Text style={styles.settingLabel}>Deadline type</Text>
+          <View style={styles.pillRow}>
+            {([false, true] as const).map((hard) => (
+              <TouchableOpacity
+                key={hard ? "hard" : "soft"}
+                style={[styles.pill, isHard === hard && styles.pillActive]}
+                onPress={() => setIsHard(hard)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.pillText, isHard === hard && styles.pillTextActive]}>
+                  {hard ? "Hard" : "Soft"}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.toggleHint}>
+            {isHard
+              ? "Students cannot submit after the deadline."
+              : "Students can submit late — marked as late."}
+          </Text>
+
           <TouchableOpacity
             style={[
               styles.primaryBtn,
@@ -384,15 +460,30 @@ export default function Dashboard() {
                     </Text>
                   </View>
                   <View style={styles.groupCardRight}>
-                    {group.student_summary?.is_submitted ? (
-                      <View style={styles.badgeGreen}>
-                        <Text style={styles.badgeText}>Submitted</Text>
-                      </View>
-                    ) : (
-                      <View style={styles.badgeAmber}>
-                        <Text style={styles.badgeText}>Not submitted</Text>
-                      </View>
-                    )}
+                    <View style={{ alignItems: "flex-end" }}>
+                      {group.student_summary?.is_submitted ? (
+                        <View style={styles.badgeGreen}>
+                          <Text style={styles.badgeText}>Submitted</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.badgeAmber}>
+                          <Text style={styles.badgeText}>Not submitted</Text>
+                        </View>
+                      )}
+                      {group.student_summary?.is_submitted &&
+                        group.student_summary.submitted_at && (
+                          <View style={styles.submittedAtRow}>
+                            <Text style={styles.submittedAtText}>
+                              {toSGT(group.student_summary.submitted_at)}
+                            </Text>
+                            {group.student_summary.is_late && (
+                              <View style={styles.lateBadge}>
+                                <Text style={styles.lateBadgeText}>Late</Text>
+                              </View>
+                            )}
+                          </View>
+                        )}
+                    </View>
                     <Text style={styles.chevron}>{isExpanded ? "▲" : "▼"}</Text>
                   </View>
                 </TouchableOpacity>
@@ -634,17 +725,76 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 14,
   },
-  // confirmed selection shown above the pickers so the coordinator can see what they're setting
   pickerSelectedText: {
     fontSize: 14,
     fontWeight: "600",
     color: "#1a1a1a",
     marginBottom: 10,
   },
-  // side-by-side "Select Date" / "Select Time" buttons on Android
-  pickerBtnRow: {
+  pickerRow: {
     flexDirection: "row",
-    marginBottom: 12,
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 4,
+  },
+  datePickerIOS: {
+    flex: 1,
+  },
+  timeInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: "#1a1a1a",
+    backgroundColor: "#f5f5f5",
+    minHeight: 44,
+    textAlign: "center",
+  },
+  timeInputError: {
+    borderColor: "#d32f2f",
+    backgroundColor: "#fff5f5",
+  },
+  settingLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#757575",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  pillRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 14,
+  },
+  pill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    backgroundColor: "#f5f5f5",
+  },
+  pillActive: {
+    backgroundColor: "#1976d2",
+    borderColor: "#1976d2",
+  },
+  pillText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#757575",
+  },
+  pillTextActive: {
+    color: "#ffffff",
+  },
+  toggleHint: {
+    fontSize: 12,
+    color: "#9e9e9e",
+    marginBottom: 14,
   },
   groupCardHeader: {
     flexDirection: "row",
@@ -678,6 +828,27 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 11,
     fontWeight: "600",
+  },
+  submittedAtRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 4,
+  },
+  submittedAtText: {
+    fontSize: 11,
+    color: "#757575",
+  },
+  lateBadge: {
+    backgroundColor: "#f59e0b",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  lateBadgeText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "700",
   },
   chevron: {
     fontSize: 11,

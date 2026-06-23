@@ -110,6 +110,7 @@ class StudentSummary(Base):
     ai_summary_copy = Column(Text, nullable=True)   # snapshot of the AI summary at save time
     is_submitted = Column(Boolean, default=False, nullable=False)
     submitted_at = Column(DateTime, nullable=True)
+    is_late = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
@@ -121,7 +122,10 @@ class Deadline(Base):
     __tablename__ = "deadlines"
 
     id = Column(Integer, primary_key=True, index=True)
-    deadline_dt = Column(DateTime, nullable=False)
+    deadline_dt = Column(DateTime, nullable=False)  # kept for backward compat — new rows use start_dt
+    start_dt = Column(DateTime, nullable=True)       # anchor datetime; replaces deadline_dt for new rows
+    frequency = Column(String, default="once", nullable=False)  # "once", "weekly", "biweekly"
+    is_hard = Column(Boolean, default=False, nullable=False)    # hard = block late submissions
     set_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

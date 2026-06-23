@@ -24,6 +24,7 @@ type HistoryItem = {
   ai_summary_copy: string | null;
   is_submitted: boolean;
   submitted_at: string | null;
+  is_late: boolean;
   created_at: string;
 };
 
@@ -86,11 +87,13 @@ export default function StudentOverview() {
   const [expandedHistoryId, setExpandedHistoryId] = useState<number | null>(null);
 
   // submission state
-  const [deadline, setDeadline] = useState<string | null>(null);
+  const [deadlineDt, setDeadlineDt] = useState<string | null>(null);
+  const [deadlineIsHard, setDeadlineIsHard] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [submitLate, setSubmitLate] = useState(false);
 
   const loadSummary = useCallback(async () => {
     if (!token) return;
@@ -129,15 +132,50 @@ export default function StudentOverview() {
       setAiSavedText(aiCopy);
       setAiEditText(aiCopy);
 
+      let histData: HistoryItem[] = [];
       if (historyRes.ok) {
-        const histData: HistoryItem[] = await historyRes.json();
+        histData = await historyRes.json();
         setHistory(histData);
-        // latest row (index 0) tells us if the current save has already been submitted
-        setIsSubmitted(histData[0]?.is_submitted ?? false);
       }
+      let nextDeadlineDt: string | null = null;
+      let dlFrequency: string = "once";
       if (deadlineRes.ok) {
         const dlData = await deadlineRes.json();
-        setDeadline(dlData ? dlData.deadline_dt : null);
+        nextDeadlineDt = dlData ? dlData.next_deadline_dt : null;
+        dlFrequency = dlData ? (dlData.frequency ?? "once") : "once";
+        setDeadlineDt(nextDeadlineDt);
+        setDeadlineIsHard(dlData ? dlData.is_hard : false);
+      }
+      // If no deadline exists, fall back to the plain is_submitted flag on the row.
+      // If a deadline exists, only disable if the latest submission is within the current window.
+      const latestHist = histData[0];
+      if (!latestHist) {
+        setIsSubmitted(false);
+      } else if (!nextDeadlineDt) {
+        setIsSubmitted(latestHist.is_submitted ?? false);
+      } else {
+        const nextDtMs = new Date(
+          nextDeadlineDt.includes("Z") || nextDeadlineDt.includes("+")
+            ? nextDeadlineDt
+            : nextDeadlineDt + "Z"
+        ).getTime();
+        // window start = next_deadline_dt minus one frequency interval
+        let intervalMs = 0;
+        if (dlFrequency === "weekly") intervalMs = 7 * 24 * 60 * 60 * 1000;
+        else if (dlFrequency === "biweekly") intervalMs = 14 * 24 * 60 * 60 * 1000;
+        // "once" keeps intervalMs = 0 — window start = epoch, so any submission counts
+        const windowStartMs = intervalMs > 0 ? nextDtMs - intervalMs : 0;
+        if (latestHist.is_submitted && latestHist.submitted_at) {
+          const submittedMs = new Date(
+            latestHist.submitted_at.includes("Z") || latestHist.submitted_at.includes("+")
+              ? latestHist.submitted_at
+              : latestHist.submitted_at + "Z"
+          ).getTime();
+          // submitted within this window → already done; before window start → new window, allow resubmit
+          setIsSubmitted(submittedMs >= windowStartMs);
+        } else {
+          setIsSubmitted(false);
+        }
       }
     } catch (e: any) {
       setFetchError(e.message ?? "Failed to load summary");
@@ -198,19 +236,50 @@ export default function StudentOverview() {
     setSubmitError(null);
     setSubmitSuccess(false);
     try {
-      const res = await fetch(
+      // always save current content first, then submit the saved copy
+      const saveRes = await fetch(
+        `${API_BASE}/groups/${groupId}/student-summary`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ summary_text: editText, ai_summary_copy: aiEditText }),
+        }
+      );
+      if (!saveRes.ok) throw new Error(`Save failed (${saveRes.status})`);
+      const saveData = await saveRes.json();
+      // sync saved state so hasChanges goes back to false
+      const newSummaryText = saveData.summary_text ?? editText;
+      const newAiText = saveData.ai_summary_copy ?? aiEditText;
+      setSavedText(newSummaryText);
+      setAiSavedText(newAiText);
+      setEditText(newSummaryText);
+      setAiEditText(newAiText);
+
+      const submitRes = await fetch(
         `${API_BASE}/groups/${groupId}/student-summary/submit`,
         {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
         }
       );
-      if (!res.ok) {
-        const errData = await res.json().catch(() => null);
-        throw new Error(errData?.detail ?? `Submit failed (${res.status})`);
+      if (!submitRes.ok) {
+        const errData = await submitRes.json().catch(() => null);
+        throw new Error(errData?.detail ?? `Submit failed (${submitRes.status})`);
       }
+      const submitData = await submitRes.json();
       setIsSubmitted(true);
       setSubmitSuccess(true);
+      setSubmitLate(submitData.is_late ?? false);
+
+      // reload history so the submitted entry appears immediately
+      const histRes = await fetch(
+        `${API_BASE}/groups/${groupId}/student-summary/history`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (histRes.ok) {
+        const histData: HistoryItem[] = await histRes.json();
+        setHistory(histData);
+      }
     } catch (e: any) {
       setSubmitError(e.message ?? "Submit failed");
     } finally {
@@ -219,14 +288,20 @@ export default function StudentOverview() {
   };
 
   const deadlinePassed =
-    deadline !== null &&
+    deadlineDt !== null &&
     Date.now() >
       new Date(
-        deadline.includes("Z") || deadline.includes("+") ? deadline : deadline + "Z"
+        deadlineDt.includes("Z") || deadlineDt.includes("+") ? deadlineDt : deadlineDt + "Z"
       ).getTime();
 
+  // enabled whenever there are unsaved changes (acts as save+submit in one tap)
+  // disabled only when already submitted this window with nothing new, or hard deadline has passed
   const submitDisabled =
-    history.length === 0 || isSubmitted || deadlinePassed || submitting || isLoading;
+    history.length === 0 ||
+    (deadlinePassed && deadlineIsHard) ||
+    submitting ||
+    isLoading ||
+    (!hasChanges && isSubmitted);
 
   const toggleHistoryItem = (id: number) => {
     setExpandedHistoryId((prev) => (prev === id ? null : id));
@@ -273,8 +348,8 @@ export default function StudentOverview() {
       {/* Deadline + Submit row — always visible below the header */}
       <View style={styles.deadlineRow}>
         <Text style={styles.deadlineText}>
-          {deadline
-            ? `Due: ${formatDeadlineSGT(deadline)}`
+          {deadlineDt
+            ? `Due: ${formatDeadlineSGT(deadlineDt)}`
             : "No deadline set"}
         </Text>
         <TouchableOpacity
@@ -287,11 +362,20 @@ export default function StudentOverview() {
             <ActivityIndicator size="small" color="#ffffff" />
           ) : (
             <Text style={styles.submitBtnText}>
-              {isSubmitted ? "Submitted" : "Submit"}
+              {isSubmitted && !hasChanges ? "Submitted" : "Submit"}
             </Text>
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Info strip — soft deadline passed, student hasn't submitted yet */}
+      {deadlinePassed && !deadlineIsHard && !isSubmitted && (
+        <View style={styles.warningBanner}>
+          <Text style={styles.warningBannerText}>
+            Submitting after the deadline will be marked as late.
+          </Text>
+        </View>
+      )}
 
       {/* Save error banner — stays above the input so it doesn't block it */}
       {saveError !== null && (
@@ -307,10 +391,12 @@ export default function StudentOverview() {
         </View>
       )}
 
-      {/* Submit success banner */}
+      {/* Submit success banner — amber when late, green when on time */}
       {submitSuccess && (
-        <View style={styles.successBanner}>
-          <Text style={styles.successBannerText}>Summary submitted successfully.</Text>
+        <View style={submitLate ? styles.lateBanner : styles.successBanner}>
+          <Text style={submitLate ? styles.lateBannerText : styles.successBannerText}>
+            {submitLate ? "Submitted late." : "Summary submitted successfully."}
+          </Text>
         </View>
       )}
 
@@ -408,7 +494,14 @@ export default function StudentOverview() {
                       <Text style={styles.historyRowDate}>
                         {formatDate(item.created_at)}
                       </Text>
-                      <Text style={styles.chevron}>{isExpanded ? "▲" : "▼"}</Text>
+                      <View style={styles.historyRowBadges}>
+                        {item.is_late && (
+                          <View style={styles.lateBadge}>
+                            <Text style={styles.lateBadgeText}>Late</Text>
+                          </View>
+                        )}
+                        <Text style={styles.chevron}>{isExpanded ? "▲" : "▼"}</Text>
+                      </View>
                     </View>
                     {isExpanded && (
                       <Text style={styles.historyRowText}>
@@ -614,6 +707,21 @@ const styles = StyleSheet.create({
     color: "#15803d",
     fontSize: 13,
   },
+  lateBanner: {
+    backgroundColor: "#fffbeb",
+    borderLeftWidth: 4,
+    borderLeftColor: "#f59e0b",
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 12,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  lateBannerText: {
+    color: "#92400e",
+    fontSize: 13,
+  },
   emptyText: {
     color: "#9e9e9e",
     fontSize: 15,
@@ -685,5 +793,35 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#1a1a1a",
     lineHeight: 22,
+  },
+  historyRowBadges: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  lateBadge: {
+    backgroundColor: "#f59e0b",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  lateBadgeText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  warningBanner: {
+    backgroundColor: "#fffbeb",
+    borderLeftWidth: 4,
+    borderLeftColor: "#f59e0b",
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  warningBannerText: {
+    color: "#92400e",
+    fontSize: 13,
   },
 });

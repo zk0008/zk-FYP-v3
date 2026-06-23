@@ -246,6 +246,26 @@ async def startup_event():
             conn.commit()
         except Exception:
             pass
+        try:
+            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN is_late BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE deadlines ADD COLUMN start_dt DATETIME"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE deadlines ADD COLUMN frequency VARCHAR NOT NULL DEFAULT 'once'"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE deadlines ADD COLUMN is_hard BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+        except Exception:
+            pass
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS deadlines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -328,8 +348,26 @@ class StudentSummaryRequest(BaseModel):
 
 
 class DeadlineRequest(BaseModel):
-    deadline_dt: datetime
+    start_dt: datetime
+    frequency: str = "once"
+    is_hard: bool = False
 
+
+def compute_next_deadline(deadline_row) -> datetime:
+    # fall back to deadline_dt for rows created before start_dt existed
+    anchor = deadline_row.start_dt or deadline_row.deadline_dt
+    if deadline_row.frequency == "weekly":
+        increment = timedelta(weeks=1)
+    elif deadline_row.frequency == "biweekly":
+        increment = timedelta(weeks=2)
+    else:
+        # "once" — the anchor is the only occurrence
+        return anchor
+    result = anchor
+    now = datetime.utcnow()
+    while result < now:
+        result += increment
+    return result
 
 
 def web_search(query: str, max_results: int = 5) -> str:
@@ -1967,11 +2005,20 @@ def submit_student_summary(
     if not latest:
         raise HTTPException(status_code=404, detail="No summary to submit")
 
-    if latest.is_submitted:
-        raise HTTPException(status_code=400, detail="Summary already submitted")
+    # Check the deadline and decide whether to block or flag as late
+    deadline_row = db.query(models.Deadline).order_by(models.Deadline.created_at.desc()).first()
+    is_late = False
+    if deadline_row:
+        next_dt = compute_next_deadline(deadline_row)
+        if datetime.utcnow() > next_dt:
+            if deadline_row.is_hard:
+                raise HTTPException(status_code=403, detail="Submission deadline has passed.")
+            else:
+                is_late = True
 
     latest.is_submitted = True
     latest.submitted_at = datetime.utcnow()
+    latest.is_late = is_late
     db.commit()
     db.refresh(latest)
 
@@ -1982,6 +2029,7 @@ def submit_student_summary(
         "ai_summary_copy": latest.ai_summary_copy,
         "is_submitted": latest.is_submitted,
         "submitted_at": latest.submitted_at.isoformat(),
+        "is_late": latest.is_late,
         "created_at": latest.created_at.isoformat(),
     }
 
@@ -1994,8 +2042,11 @@ def get_deadline(
     row = db.query(models.Deadline).order_by(models.Deadline.created_at.desc()).first()
     if not row:
         return None
+    next_dt = compute_next_deadline(row)
     return {
-        "deadline_dt": row.deadline_dt.isoformat(),
+        "next_deadline_dt": next_dt.isoformat(),
+        "frequency": row.frequency,
+        "is_hard": row.is_hard,
         "set_by": row.set_by.username if row.set_by else None,
     }
 
@@ -2009,16 +2060,25 @@ def set_deadline(
     if current_user.role != "coordinator":
         raise HTTPException(status_code=403, detail="Only coordinators can set the deadline")
 
+    if body.frequency not in ("once", "weekly", "biweekly"):
+        raise HTTPException(status_code=400, detail="frequency must be 'once', 'weekly', or 'biweekly'")
+
     new_deadline = models.Deadline(
-        deadline_dt=body.deadline_dt,
+        deadline_dt=body.start_dt,  # keep deadline_dt in sync for backward compat
+        start_dt=body.start_dt,
+        frequency=body.frequency,
+        is_hard=body.is_hard,
         set_by_user_id=current_user.id,
     )
     db.add(new_deadline)
     db.commit()
     db.refresh(new_deadline)
 
+    next_dt = compute_next_deadline(new_deadline)
     return {
-        "deadline_dt": new_deadline.deadline_dt.isoformat(),
+        "next_deadline_dt": next_dt.isoformat(),
+        "frequency": new_deadline.frequency,
+        "is_hard": new_deadline.is_hard,
         "set_by": current_user.username,
     }
 
@@ -2200,6 +2260,7 @@ def coordinator_groups_overview(
                 "summary_text": latest_student.summary_text,
                 "is_submitted": latest_student.is_submitted,
                 "submitted_at": latest_student.submitted_at.isoformat() if latest_student.submitted_at else None,
+                "is_late": latest_student.is_late,
             } if latest_student else None,
             "total_messages": total_messages,
         })
