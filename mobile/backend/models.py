@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Text, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Date, Text, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -126,6 +126,18 @@ class Deadline(Base):
     start_dt = Column(DateTime, nullable=True)       # anchor datetime; replaces deadline_dt for new rows
     frequency = Column(String, default="once", nullable=False)  # "once", "weekly", "biweekly"
     is_hard = Column(Boolean, default=False, nullable=False)    # hard = block late submissions
+    set_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    set_by = relationship("User")
+
+
+class CoursePeriod(Base):
+    __tablename__ = "course_periods"
+
+    id = Column(Integer, primary_key=True, index=True)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
     set_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

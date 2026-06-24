@@ -5,7 +5,7 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Platform,
+  Modal,
   StyleSheet,
 } from "react-native";
 import { useRouter, Stack } from "expo-router";
@@ -32,6 +32,12 @@ function toSGT(iso: string): string {
   );
 }
 
+
+// format a YYYY-MM-DD string as "1 Jan 2026" without any timezone conversion
+function formatDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${d} ${PICKER_MONTHS[(m as number) - 1]} ${y}`;
+}
 
 type GroupOverview = {
   id: number;
@@ -80,14 +86,30 @@ export default function Dashboard() {
     d.setHours(23, 59, 0, 0);
     return d;
   });
-  // Android only — date picker is a modal dialog, so track whether it's open
-  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showDeadlineDatePicker, setShowDeadlineDatePicker] = useState(false);
   const [timeText, setTimeText] = useState("23:59");
   const [timeError, setTimeError] = useState("");
   const [deadlineStatus, setDeadlineStatus] = useState<
     "idle" | "saving" | "success" | "error"
   >("idle");
   const [deadlineError, setDeadlineError] = useState("");
+
+  const [coursePeriod, setCoursePeriod] = useState<{
+    start_date: string;
+    end_date: string;
+    set_by: string | null;
+  } | null>(null);
+  const [cpStartDate, setCpStartDate] = useState<Date>(() => new Date());
+  const [cpEndDate, setCpEndDate] = useState<Date>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d;
+  });
+  const [activeCpPicker, setActiveCpPicker] = useState<null | "start" | "end">(null);
+  const [courseStatus, setCourseStatus] = useState<
+    "idle" | "saving" | "success" | "error"
+  >("idle");
+  const [courseError, setCourseError] = useState("");
 
   const [overview, setOverview] = useState<GroupOverview[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(true);
@@ -112,6 +134,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!token) return;
     loadDeadline();
+    loadCoursePeriod();
     loadOverview();
   }, [token]);
 
@@ -131,10 +154,34 @@ export default function Dashboard() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         setDeadline(data);
-        // seed the pill selectors so they reflect the current deadline on reload
+        // seed pickers so they reflect the current deadline on reload
         if (data) {
           setIsHard(data.is_hard ?? false);
           setFrequency(data.frequency ?? "once");
+          const dt = new Date(data.next_deadline_dt);
+          setPickerDate(dt);
+          const p = (n: number) => String(n).padStart(2, "0");
+          const sgtH = dt.getHours();
+          const sgtM = dt.getMinutes();
+          setTimeText(`${p(sgtH)}:${p(sgtM)}`);
+        }
+      })
+      .catch(() => {});
+  }
+
+  function loadCoursePeriod() {
+    fetch(`${API_BASE}/course-period`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        setCoursePeriod(data);
+        if (data) {
+          // parse as local date parts to avoid UTC midnight shifting the day
+          const [sy, sm, sd] = data.start_date.split("-").map(Number);
+          const [ey, em, ed] = data.end_date.split("-").map(Number);
+          setCpStartDate(new Date(sy, sm - 1, sd));
+          setCpEndDate(new Date(ey, em - 1, ed));
         }
       })
       .catch(() => {});
@@ -250,6 +297,48 @@ export default function Dashboard() {
     }
   }
 
+  async function handleSetCoursePeriod() {
+    setCourseStatus("saving");
+    setCourseError("");
+
+    if (cpEndDate <= cpStartDate) {
+      setCourseError("End date must be after start date.");
+      setCourseStatus("error");
+      return;
+    }
+
+    // send dates as YYYY-MM-DD strings — backend expects date type, not datetime
+    const fmtDate = (d: Date) => {
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    };
+
+    try {
+      const res = await fetch(`${API_BASE}/course-period`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          start_date: fmtDate(cpStartDate),
+          end_date: fmtDate(cpEndDate),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(err.detail ?? "Unknown error");
+      }
+      const data = await res.json();
+      setCoursePeriod(data);
+      setCourseStatus("success");
+      setTimeout(() => setCourseStatus("idle"), 3000);
+    } catch (e: unknown) {
+      setCourseStatus("error");
+      setCourseError(e instanceof Error ? e.message : "Unknown error");
+    }
+  }
+
   function toggleGroup(groupId: string) {
     setExpandedGroupId((prev) => (prev === groupId ? null : groupId));
   }
@@ -280,6 +369,97 @@ export default function Dashboard() {
 
       <ScrollView contentContainerStyle={styles.scroll}>
 
+        {/* ── Course Period ──────────────────────────────────────── */}
+        <Text style={styles.sectionLabel}>Course Period</Text>
+        <View style={styles.card}>
+          {coursePeriod ? (
+            <Text style={styles.deadlineText}>
+              <Text style={{ fontWeight: "600" }}>
+                {"Start: " + formatDate(coursePeriod.start_date) + " — End: " + formatDate(coursePeriod.end_date)}
+              </Text>
+              {coursePeriod.set_by ? `  ·  set by ${coursePeriod.set_by}` : ""}
+            </Text>
+          ) : (
+            <Text style={styles.mutedText}>No course period set yet.</Text>
+          )}
+
+          <View style={styles.cpPickerRow}>
+            <View style={styles.cpPickerCol}>
+              <Text style={styles.cpPickerLabel}>Start Date</Text>
+              <TouchableOpacity
+                style={styles.outlineBtn}
+                onPress={() => setActiveCpPicker("start")}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.outlineBtnText}>
+                  {cpStartDate.getDate()} {PICKER_MONTHS[cpStartDate.getMonth()]} {cpStartDate.getFullYear()}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.cpPickerCol}>
+              <Text style={styles.cpPickerLabel}>End Date</Text>
+              <TouchableOpacity
+                style={styles.outlineBtn}
+                onPress={() => setActiveCpPicker("end")}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.outlineBtnText}>
+                  {cpEndDate.getDate()} {PICKER_MONTHS[cpEndDate.getMonth()]} {cpEndDate.getFullYear()}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <Modal
+            visible={activeCpPicker !== null}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setActiveCpPicker(null)}
+          >
+            <TouchableOpacity
+              style={styles.cpModalOverlay}
+              activeOpacity={1}
+              onPress={() => setActiveCpPicker(null)}
+            >
+              <View style={styles.cpModalContent}>
+                <DateTimePicker
+                  value={activeCpPicker === "start" ? cpStartDate : cpEndDate}
+                  mode="date"
+                  display="spinner"
+                  onChange={(_e, date) => {
+                    if (date) {
+                      if (activeCpPicker === "start") setCpStartDate(date);
+                      else setCpEndDate(date);
+                    }
+                  }}
+                />
+              </View>
+            </TouchableOpacity>
+          </Modal>
+
+          <TouchableOpacity
+            style={[
+              styles.primaryBtn,
+              courseStatus === "saving" && styles.btnDisabled,
+            ]}
+            onPress={handleSetCoursePeriod}
+            activeOpacity={0.8}
+            disabled={courseStatus === "saving"}
+          >
+            {courseStatus === "saving" ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Text style={styles.primaryBtnText}>Set Course Period</Text>
+            )}
+          </TouchableOpacity>
+          {courseStatus === "success" && (
+            <Text style={styles.successText}>✓ Course period updated.</Text>
+          )}
+          {courseStatus === "error" && (
+            <Text style={styles.errorText}>{courseError}</Text>
+          )}
+        </View>
+
         {/* ── Section A: Deadline Setter ────────────────────────── */}
         <Text style={styles.sectionLabel}>Deadline</Text>
         <View style={styles.card}>
@@ -305,31 +485,17 @@ export default function Dashboard() {
             Set to: {formatPickerDisplay(pickerDate, timeText)}
           </Text>
 
-          {/* compact date picker + time text input side by side */}
+          {/* date button + time text input side by side */}
           <View style={styles.pickerRow}>
-            {Platform.OS === "ios" ? (
-              <DateTimePicker
-                value={pickerDate}
-                mode="date"
-                display="compact"
-                onChange={(_e, date) => {
-                  if (date) {
-                    const next = new Date(pickerDate);
-                    next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
-                    setPickerDate(next);
-                  }
-                }}
-                style={styles.datePickerIOS}
-              />
-            ) : (
-              <TouchableOpacity
-                style={[styles.outlineBtn, { flex: 1 }]}
-                onPress={() => setShowDatePicker(true)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.outlineBtnText}>Select Date</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              style={[styles.outlineBtn, { flex: 1 }]}
+              onPress={() => setShowDeadlineDatePicker(true)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.outlineBtnText}>
+                {pickerDate.getDate()} {PICKER_MONTHS[pickerDate.getMonth()]} {pickerDate.getFullYear()}
+              </Text>
+            </TouchableOpacity>
             <TextInput
               style={[styles.timeInput, timeError ? styles.timeInputError : undefined]}
               value={timeText}
@@ -342,22 +508,33 @@ export default function Dashboard() {
           </View>
           {timeError ? <Text style={styles.errorText}>{timeError}</Text> : null}
 
-          {/* Android date picker modal — only mounted when triggered */}
-          {Platform.OS === "android" && showDatePicker && (
-            <DateTimePicker
-              value={pickerDate}
-              mode="date"
-              display="default"
-              onChange={(_e, date) => {
-                setShowDatePicker(false);
-                if (date) {
-                  const next = new Date(pickerDate);
-                  next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
-                  setPickerDate(next);
-                }
-              }}
-            />
-          )}
+          <Modal
+            visible={showDeadlineDatePicker}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowDeadlineDatePicker(false)}
+          >
+            <TouchableOpacity
+              style={styles.cpModalOverlay}
+              activeOpacity={1}
+              onPress={() => setShowDeadlineDatePicker(false)}
+            >
+              <View style={styles.cpModalContent}>
+                <DateTimePicker
+                  value={pickerDate}
+                  mode="date"
+                  display="spinner"
+                  onChange={(_e, date) => {
+                    if (date) {
+                      const next = new Date(pickerDate);
+                      next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+                      setPickerDate(next);
+                    }
+                  }}
+                />
+              </View>
+            </TouchableOpacity>
+          </Modal>
 
           {/* Frequency selector — pill buttons matching the week selector style */}
           <Text style={styles.settingLabel}>Frequency</Text>
@@ -737,9 +914,6 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 4,
   },
-  datePickerIOS: {
-    flex: 1,
-  },
   timeInput: {
     flex: 1,
     borderWidth: 1,
@@ -960,6 +1134,34 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#1a1a1a",
     lineHeight: 20,
+  },
+  cpPickerRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  cpPickerCol: {
+    flex: 1,
+  },
+  cpPickerLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#757575",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 6,
+  },
+  cpModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cpModalContent: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    overflow: "hidden",
   },
 });
 

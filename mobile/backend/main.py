@@ -5,7 +5,7 @@ import base64
 import asyncio
 import logging
 import requests as http_requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -275,6 +275,16 @@ async def startup_event():
             )
         """))
         conn.commit()
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS course_periods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                set_by_user_id INTEGER REFERENCES users(id),
+                created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        conn.commit()
     # Copy any existing Group.student_summary text into the new student_summaries table
     migrate_student_summaries()
     # Ensure uploads directories exist
@@ -351,6 +361,11 @@ class DeadlineRequest(BaseModel):
     start_dt: datetime
     frequency: str = "once"
     is_hard: bool = False
+
+
+class CoursePeriodRequest(BaseModel):
+    start_date: date
+    end_date: date
 
 
 def compute_next_deadline(deadline_row) -> datetime:
@@ -686,7 +701,7 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                 "message_id": notif.message_id,
                 "group_id": notif.group_id,
                 "group_string_id": grp.string_id,
-                "created_at": notif.created_at.isoformat()
+                "created_at": notif.created_at.isoformat() + "Z"
             })
 
         # Look up the integer group PK once — needed for DB writes
@@ -718,7 +733,7 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                     "text": content,
                     "is_bot": False,
                     "group_string_id": group_id,
-                    "timestamp": new_message.timestamp.isoformat()
+                    "timestamp": new_message.timestamp.isoformat() + "Z"
                 })
 
                 # Nudge members who are connected to a *different* group's WS
@@ -798,7 +813,7 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                         "message_id": new_message.id,
                         "group_id": db_group.id,
                         "group_string_id": db_group.string_id,
-                        "created_at": notif.created_at.isoformat()
+                        "created_at": notif.created_at.isoformat() + "Z"
                     })
 
                 # If @ai is in the message, run the RAG pipeline and broadcast the reply
@@ -829,7 +844,7 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                                 "text": ai_message.content,
                                 "is_bot": True,
                                 "group_string_id": group_id,
-                                "timestamp": ai_message.timestamp.isoformat()
+                                "timestamp": ai_message.timestamp.isoformat() + "Z"
                             })
 
         except WebSocketDisconnect:
@@ -1125,7 +1140,7 @@ def list_messages(
             "is_bot": msg.is_AI,
             "message_type": msg_type,
             "image_url": image_url,
-            "timestamp": msg.timestamp.isoformat()
+            "timestamp": msg.timestamp.isoformat() + "Z"
         })
 
     return result
@@ -1606,10 +1621,10 @@ def get_summary(
         "group_id": summary.group_id,
         "range": summary.range_type,
         "summary_text": summary.summary_text,
-        "created_at": summary.created_at.isoformat() if summary.created_at else None,
-        "start_time": summary.start_time.isoformat() if summary.start_time else None,
-        "end_time": summary.end_time.isoformat() if summary.end_time else None,
-        "source_last_message_ts": summary.source_last_message_ts.isoformat() if summary.source_last_message_ts else None,
+        "created_at": summary.created_at.isoformat() + "Z" if summary.created_at else None,
+        "start_time": summary.start_time.isoformat() + "Z" if summary.start_time else None,
+        "end_time": summary.end_time.isoformat() + "Z" if summary.end_time else None,
+        "source_last_message_ts": summary.source_last_message_ts.isoformat() + "Z" if summary.source_last_message_ts else None,
         "source_message_count": summary.source_message_count
     }
 
@@ -1658,7 +1673,7 @@ def generate_summary(
             "group_id": group_id,
             "range": range,
             "summary_text": "No messages in the selected period.",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.utcnow().isoformat() + "Z",
             "start_time": None,
             "end_time": None,
             "source_last_message_ts": None,
@@ -1680,10 +1695,10 @@ def generate_summary(
                 "group_id": existing_summary.group_id,
                 "range": existing_summary.range_type,
                 "summary_text": existing_summary.summary_text,
-                "created_at": existing_summary.created_at.isoformat() if existing_summary.created_at else None,
-                "start_time": existing_summary.start_time.isoformat() if existing_summary.start_time else None,
-                "end_time": existing_summary.end_time.isoformat() if existing_summary.end_time else None,
-                "source_last_message_ts": existing_summary.source_last_message_ts.isoformat() if existing_summary.source_last_message_ts else None,
+                "created_at": existing_summary.created_at.isoformat() + "Z" if existing_summary.created_at else None,
+                "start_time": existing_summary.start_time.isoformat() + "Z" if existing_summary.start_time else None,
+                "end_time": existing_summary.end_time.isoformat() + "Z" if existing_summary.end_time else None,
+                "source_last_message_ts": existing_summary.source_last_message_ts.isoformat() + "Z" if existing_summary.source_last_message_ts else None,
                 "source_message_count": existing_summary.source_message_count
             }
 
@@ -1842,10 +1857,10 @@ def generate_summary(
         "group_id": new_summary.group_id,
         "range": new_summary.range_type,
         "summary_text": new_summary.summary_text,
-        "created_at": new_summary.created_at.isoformat() if new_summary.created_at else None,
-        "start_time": new_summary.start_time.isoformat() if new_summary.start_time else None,
-        "end_time": new_summary.end_time.isoformat() if new_summary.end_time else None,
-        "source_last_message_ts": new_summary.source_last_message_ts.isoformat() if new_summary.source_last_message_ts else None,
+        "created_at": new_summary.created_at.isoformat() + "Z" if new_summary.created_at else None,
+        "start_time": new_summary.start_time.isoformat() + "Z" if new_summary.start_time else None,
+        "end_time": new_summary.end_time.isoformat() + "Z" if new_summary.end_time else None,
+        "source_last_message_ts": new_summary.source_last_message_ts.isoformat() + "Z" if new_summary.source_last_message_ts else None,
         "source_message_count": new_summary.source_message_count
     }
 
@@ -1875,7 +1890,7 @@ def get_summary_history(
         {
             "id": r.id,
             "summary_text": r.summary_text,
-            "created_at": r.created_at.isoformat(),
+            "created_at": r.created_at.isoformat() + "Z",
             "source_message_count": r.source_message_count,
         }
         for r in rows
@@ -1974,8 +1989,8 @@ def get_student_summary_history(
             "summary_text": r.summary_text,
             "ai_summary_copy": r.ai_summary_copy,
             "is_submitted": r.is_submitted,
-            "submitted_at": r.submitted_at.isoformat() if r.submitted_at else None,
-            "created_at": r.created_at.isoformat(),
+            "submitted_at": r.submitted_at.isoformat() + "Z" if r.submitted_at else None,
+            "created_at": r.created_at.isoformat() + "Z",
         }
         for r in rows
     ]
@@ -2028,9 +2043,9 @@ def submit_student_summary(
         "summary_text": latest.summary_text,
         "ai_summary_copy": latest.ai_summary_copy,
         "is_submitted": latest.is_submitted,
-        "submitted_at": latest.submitted_at.isoformat(),
+        "submitted_at": latest.submitted_at.isoformat() + "Z",
         "is_late": latest.is_late,
-        "created_at": latest.created_at.isoformat(),
+        "created_at": latest.created_at.isoformat() + "Z",
     }
 
 
@@ -2044,7 +2059,7 @@ def get_deadline(
         return None
     next_dt = compute_next_deadline(row)
     return {
-        "next_deadline_dt": next_dt.isoformat(),
+        "next_deadline_dt": next_dt.isoformat() + "Z",
         "frequency": row.frequency,
         "is_hard": row.is_hard,
         "set_by": row.set_by.username if row.set_by else None,
@@ -2076,9 +2091,52 @@ def set_deadline(
 
     next_dt = compute_next_deadline(new_deadline)
     return {
-        "next_deadline_dt": next_dt.isoformat(),
+        "next_deadline_dt": next_dt.isoformat() + "Z",
         "frequency": new_deadline.frequency,
         "is_hard": new_deadline.is_hard,
+        "set_by": current_user.username,
+    }
+
+
+@app.get("/course-period")
+def get_course_period(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    row = db.query(models.CoursePeriod).order_by(models.CoursePeriod.created_at.desc()).first()
+    if not row:
+        return None
+    return {
+        "start_date": row.start_date.isoformat(),
+        "end_date": row.end_date.isoformat(),
+        "set_by": row.set_by.username if row.set_by else None,
+    }
+
+
+@app.post("/course-period")
+def set_course_period(
+    body: CoursePeriodRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "coordinator":
+        raise HTTPException(status_code=403, detail="Only coordinators can set the course period")
+
+    if body.end_date <= body.start_date:
+        raise HTTPException(status_code=400, detail="end_date must be after start_date")
+
+    new_period = models.CoursePeriod(
+        start_date=body.start_date,
+        end_date=body.end_date,
+        set_by_user_id=current_user.id,
+    )
+    db.add(new_period)
+    db.commit()
+    db.refresh(new_period)
+
+    return {
+        "start_date": new_period.start_date.isoformat(),
+        "end_date": new_period.end_date.isoformat(),
         "set_by": current_user.username,
     }
 
@@ -2101,7 +2159,7 @@ def get_notifications(
             "message_id": n.message_id,
             "group_id": n.group_id,
             "group_string_id": g.string_id,
-            "created_at": n.created_at.isoformat()
+            "created_at": n.created_at.isoformat() + "Z"
         }
         for n, g in results
     ]
@@ -2254,12 +2312,12 @@ def coordinator_groups_overview(
             "string_id": group.string_id,
             "ai_summary": {
                 "summary_text": latest_ai.summary_text,
-                "created_at": latest_ai.created_at.isoformat(),
+                "created_at": latest_ai.created_at.isoformat() + "Z",
             } if latest_ai else None,
             "student_summary": {
                 "summary_text": latest_student.summary_text,
                 "is_submitted": latest_student.is_submitted,
-                "submitted_at": latest_student.submitted_at.isoformat() if latest_student.submitted_at else None,
+                "submitted_at": latest_student.submitted_at.isoformat() + "Z" if latest_student.submitted_at else None,
                 "is_late": latest_student.is_late,
             } if latest_student else None,
             "total_messages": total_messages,
@@ -2321,8 +2379,8 @@ def coordinator_group_contributions(
         "contributions": contributions,
         "total_messages": total_messages,
         "date_range": {
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
+            "start": start_dt.isoformat() + "Z",
+            "end": end_dt.isoformat() + "Z",
         },
     }
 
@@ -2359,10 +2417,10 @@ def coordinator_group_analysis(
     if not messages:
         return {
             "analysis_text": f"No messages found in the last {weeks} week(s). Nothing to analyse.",
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.utcnow().isoformat() + "Z",
             "date_range": {
-                "start": start_dt.isoformat(),
-                "end": end_dt.isoformat(),
+                "start": start_dt.isoformat() + "Z",
+                "end": end_dt.isoformat() + "Z",
             },
         }
 
@@ -2388,10 +2446,10 @@ def coordinator_group_analysis(
     if not openai_client:
         return {
             "analysis_text": "Error: OPENAI_API_KEY environment variable not set. Please configure your API key.",
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.utcnow().isoformat() + "Z",
             "date_range": {
-                "start": start_dt.isoformat(),
-                "end": end_dt.isoformat(),
+                "start": start_dt.isoformat() + "Z",
+                "end": end_dt.isoformat() + "Z",
             },
         }
 
@@ -2454,9 +2512,9 @@ def coordinator_group_analysis(
 
     return {
         "analysis_text": analysis_text,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.utcnow().isoformat() + "Z",
         "date_range": {
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
+            "start": start_dt.isoformat() + "Z",
+            "end": end_dt.isoformat() + "Z",
         },
     }

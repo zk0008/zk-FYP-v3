@@ -41,7 +41,7 @@ zk-FYP-v3/
 
 ---
 
-## Phase 2 — Course Period
+## Phase 2 — Course Period ✓ Complete
 
 **Start and end date**
 - Coordinator can configure a course start date and end date
