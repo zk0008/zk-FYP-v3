@@ -49,7 +49,7 @@ zk-FYP-v3/
 
 ---
 
-## Phase 3 — Group Overview
+## Phase 3 — Group Overview ✓ Complete
 
 **Week-based display**
 - Count from Week 1 starting from the course start date to the end date

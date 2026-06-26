@@ -3,6 +3,7 @@ import {
   Text,
   TextInput,
   ScrollView,
+  FlatList,
   TouchableOpacity,
   ActivityIndicator,
   Modal,
@@ -131,6 +132,19 @@ export default function Dashboard() {
     Record<string, boolean>
   >({});
 
+  const [overviewWeekFrom, setOverviewWeekFrom] = useState(1);
+  const [overviewWeekTo, setOverviewWeekTo] = useState(1);
+  const [showFromPicker, setShowFromPicker] = useState(false);
+  const [showToPicker, setShowToPicker] = useState(false);
+
+  const [compWeekFrom, setCompWeekFrom] = useState(1);
+  const [compWeekTo, setCompWeekTo] = useState(1);
+  const [showCompFromPicker, setShowCompFromPicker] = useState(false);
+  const [showCompToPicker, setShowCompToPicker] = useState(false);
+
+  const [comparisonData, setComparisonData] = useState<Record<string, number>>({});
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+
   useEffect(() => {
     if (!token) return;
     loadDeadline();
@@ -138,14 +152,16 @@ export default function Dashboard() {
     loadOverview();
   }, [token]);
 
-  // Re-fetch contributions whenever the expanded group or week count changes,
+  // Re-fetch contributions whenever the expanded group or window selection changes,
   // but skip if we already have a cached result for this combination
   useEffect(() => {
     if (!expandedGroupId || !token) return;
-    const key = `${expandedGroupId}-${selectedWeeks}`;
+    const key = coursePeriod
+      ? `${expandedGroupId}-${overviewWeekFrom}-${overviewWeekTo}`
+      : `${expandedGroupId}-${selectedWeeks}`;
     if (contributions[key]) return;
-    loadContributions(expandedGroupId, selectedWeeks);
-  }, [expandedGroupId, selectedWeeks, token]);
+    loadContributions(expandedGroupId);
+  }, [expandedGroupId, selectedWeeks, overviewWeekFrom, overviewWeekTo, token, coursePeriod]);
 
   function loadDeadline() {
     fetch(`${API_BASE}/deadline`, {
@@ -182,6 +198,13 @@ export default function Dashboard() {
           const [ey, em, ed] = data.end_date.split("-").map(Number);
           setCpStartDate(new Date(sy, sm - 1, sd));
           setCpEndDate(new Date(ey, em - 1, ed));
+          const totalW = Math.ceil(
+            (new Date(data.end_date).getTime() - new Date(data.start_date).getTime()) /
+            (7 * 24 * 60 * 60 * 1000)
+          );
+          const seedTo = totalW > 0 ? totalW : 1;
+          setOverviewWeekTo(seedTo);
+          setCompWeekTo(seedTo);
         }
       })
       .catch(() => {});
@@ -202,13 +225,15 @@ export default function Dashboard() {
       .finally(() => setOverviewLoading(false));
   }
 
-  function loadContributions(groupId: string, weeks: number) {
-    const key = `${groupId}-${weeks}`;
+  function loadContributions(groupId: string) {
+    const key = coursePeriod
+      ? `${groupId}-${overviewWeekFrom}-${overviewWeekTo}`
+      : `${groupId}-${selectedWeeks}`;
+    const url = coursePeriod
+      ? `${API_BASE}/coordinator/groups/${groupId}/contributions?week_from=${overviewWeekFrom}&week_to=${overviewWeekTo}`
+      : `${API_BASE}/coordinator/groups/${groupId}/contributions?weeks=${selectedWeeks}`;
     setContribLoading((prev) => ({ ...prev, [key]: true }));
-    fetch(
-      `${API_BASE}/coordinator/groups/${groupId}/contributions?weeks=${weeks}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    )
+    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load contributions");
         return res.json() as Promise<ContributionData>;
@@ -222,15 +247,17 @@ export default function Dashboard() {
       );
   }
 
-  function loadAnalysis(groupId: string, weeks: number) {
-    const key = `${groupId}-${weeks}`;
+  function loadAnalysis(groupId: string) {
+    const key = coursePeriod
+      ? `${groupId}-${overviewWeekFrom}-${overviewWeekTo}`
+      : `${groupId}-${selectedWeeks}`;
     // guard against double-tap while a request is already in flight
     if (analysisLoading[key]) return;
+    const url = coursePeriod
+      ? `${API_BASE}/coordinator/groups/${groupId}/analysis?week_from=${overviewWeekFrom}&week_to=${overviewWeekTo}`
+      : `${API_BASE}/coordinator/groups/${groupId}/analysis?weeks=${selectedWeeks}`;
     setAnalysisLoading((prev) => ({ ...prev, [key]: true }));
-    fetch(
-      `${API_BASE}/coordinator/groups/${groupId}/analysis?weeks=${weeks}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    )
+    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       .then((res) => {
         if (!res.ok) throw new Error("Failed to generate analysis");
         return res.json() as Promise<{
@@ -249,6 +276,37 @@ export default function Dashboard() {
         setAnalysisLoading((prev) => ({ ...prev, [key]: false }))
       );
   }
+
+  async function loadComparison() {
+    if (!coursePeriod || overview.length === 0 || !token) return;
+    setComparisonLoading(true);
+    try {
+      const results = await Promise.all(
+        overview.map((group) =>
+          fetch(
+            `${API_BASE}/coordinator/groups/${group.string_id}/contributions?week_from=${compWeekFrom}&week_to=${compWeekTo}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          )
+            .then((res) => (res.ok ? res.json() : { total_messages: 0 }))
+            .then((data) => ({ string_id: group.string_id, total: (data.total_messages ?? 0) as number }))
+        )
+      );
+      const map: Record<string, number> = {};
+      for (const r of results) {
+        map[r.string_id] = r.total;
+      }
+      setComparisonData(map);
+    } catch {
+      // silently fail — comparison stays on last known data
+    } finally {
+      setComparisonLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!coursePeriod || overview.length === 0 || !token) return;
+    loadComparison();
+  }, [coursePeriod, compWeekFrom, compWeekTo, overview.length, token]);
 
   async function handleSetDeadline() {
     setDeadlineStatus("saving");
@@ -345,6 +403,13 @@ export default function Dashboard() {
 
   // widest bar in the comparison chart is 100%; others scale proportionally
   const maxMessages = Math.max(...overview.map((g) => g.total_messages), 1);
+  const maxComparisonCount = Math.max(...overview.map((g) => comparisonData[g.string_id] ?? 0), 1);
+  const totalWeeks = coursePeriod
+    ? Math.ceil(
+        (new Date(coursePeriod.end_date).getTime() - new Date(coursePeriod.start_date).getTime()) /
+        (7 * 24 * 60 * 60 * 1000)
+      )
+    : 0;
 
   return (
     <View style={styles.container}>
@@ -366,6 +431,148 @@ export default function Dashboard() {
           ),
         }}
       />
+
+      {/* From week picker modal */}
+      <Modal
+        visible={showFromPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowFromPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.cpModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowFromPicker(false)}
+        >
+          <View style={[styles.cpModalContent, { maxHeight: 320, width: 240 }]}>
+            <FlatList
+              data={Array.from({ length: totalWeeks }, (_, i) => i + 1)}
+              keyExtractor={(item) => String(item)}
+              renderItem={({ item: w }) => (
+                <TouchableOpacity
+                  style={styles.weekPickerItem}
+                  onPress={() => {
+                    setOverviewWeekFrom(w);
+                    if (w > overviewWeekTo) setOverviewWeekTo(w);
+                    setShowFromPicker(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.weekPickerItemText, overviewWeekFrom === w && styles.weekPickerItemActive]}>
+                    Week {w}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* To week picker modal */}
+      <Modal
+        visible={showToPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowToPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.cpModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowToPicker(false)}
+        >
+          <View style={[styles.cpModalContent, { maxHeight: 320, width: 240 }]}>
+            <FlatList
+              data={Array.from({ length: totalWeeks }, (_, i) => i + 1).filter((w) => w >= overviewWeekFrom)}
+              keyExtractor={(item) => String(item)}
+              renderItem={({ item: w }) => (
+                <TouchableOpacity
+                  style={styles.weekPickerItem}
+                  onPress={() => {
+                    setOverviewWeekTo(w);
+                    setShowToPicker(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.weekPickerItemText, overviewWeekTo === w && styles.weekPickerItemActive]}>
+                    Week {w}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Comparison From week picker modal */}
+      <Modal
+        visible={showCompFromPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCompFromPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.cpModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowCompFromPicker(false)}
+        >
+          <View style={[styles.cpModalContent, { maxHeight: 320, width: 240 }]}>
+            <FlatList
+              data={Array.from({ length: totalWeeks }, (_, i) => i + 1)}
+              keyExtractor={(item) => String(item)}
+              renderItem={({ item: w }) => (
+                <TouchableOpacity
+                  style={styles.weekPickerItem}
+                  onPress={() => {
+                    setCompWeekFrom(w);
+                    if (w > compWeekTo) setCompWeekTo(w);
+                    setShowCompFromPicker(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.weekPickerItemText, compWeekFrom === w && styles.weekPickerItemActive]}>
+                    Week {w}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Comparison To week picker modal */}
+      <Modal
+        visible={showCompToPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCompToPicker(false)}
+      >
+        <TouchableOpacity
+          style={styles.cpModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowCompToPicker(false)}
+        >
+          <View style={[styles.cpModalContent, { maxHeight: 320, width: 240 }]}>
+            <FlatList
+              data={Array.from({ length: totalWeeks }, (_, i) => i + 1).filter((w) => w >= compWeekFrom)}
+              keyExtractor={(item) => String(item)}
+              renderItem={({ item: w }) => (
+                <TouchableOpacity
+                  style={styles.weekPickerItem}
+                  onPress={() => {
+                    setCompWeekTo(w);
+                    setShowCompToPicker(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.weekPickerItemText, compWeekTo === w && styles.weekPickerItemActive]}>
+                    Week {w}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <ScrollView contentContainerStyle={styles.scroll}>
 
@@ -616,7 +823,9 @@ export default function Dashboard() {
           overviewError === "" &&
           overview.map((group) => {
             const isExpanded = expandedGroupId === group.string_id;
-            const cKey = `${group.string_id}-${selectedWeeks}`;
+            const cKey = coursePeriod
+              ? `${group.string_id}-${overviewWeekFrom}-${overviewWeekTo}`
+              : `${group.string_id}-${selectedWeeks}`;
             const contribData = contributions[cKey];
             const isContribLoading = !!contribLoading[cKey];
             const analysisText = analysis[cKey];
@@ -677,28 +886,58 @@ export default function Dashboard() {
                   <View style={styles.expandedContent}>
 
                     {/* Week selector — shared by contributions and analysis */}
-                    <View style={styles.weekRow}>
-                      {WEEK_OPTIONS.map((w) => (
-                        <TouchableOpacity
-                          key={w}
-                          style={[
-                            styles.weekBtn,
-                            selectedWeeks === w && styles.weekBtnActive,
-                          ]}
-                          onPress={() => setSelectedWeeks(w)}
-                          activeOpacity={0.7}
-                        >
-                          <Text
-                            style={[
-                              styles.weekBtnText,
-                              selectedWeeks === w && styles.weekBtnTextActive,
-                            ]}
+                    {coursePeriod ? (
+                      <>
+                        <View style={styles.weekPickerRow}>
+                          <Text style={styles.weekPickerLabel}>From</Text>
+                          <TouchableOpacity
+                            style={[styles.outlineBtn, { flex: 0, alignSelf: "flex-start", paddingHorizontal: 16 }]}
+                            onPress={() => setShowFromPicker(true)}
+                            activeOpacity={0.8}
                           >
-                            {w}W
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
+                            <Text style={styles.outlineBtnText}>Week {overviewWeekFrom}</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.weekPickerRow}>
+                          <Text style={styles.weekPickerLabel}>To</Text>
+                          <TouchableOpacity
+                            style={[styles.outlineBtn, { flex: 0, alignSelf: "flex-start", paddingHorizontal: 16 }]}
+                            onPress={() => setShowToPicker(true)}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={styles.outlineBtnText}>Week {overviewWeekTo}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <View style={styles.weekRow}>
+                          {WEEK_OPTIONS.map((w) => (
+                            <TouchableOpacity
+                              key={w}
+                              style={[
+                                styles.weekBtn,
+                                selectedWeeks === w && styles.weekBtnActive,
+                              ]}
+                              onPress={() => setSelectedWeeks(w)}
+                              activeOpacity={0.7}
+                            >
+                              <Text
+                                style={[
+                                  styles.weekBtnText,
+                                  selectedWeeks === w && styles.weekBtnTextActive,
+                                ]}
+                              >
+                                {w}W
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                        <Text style={styles.mutedText}>
+                          Set a course period to enable week-based view
+                        </Text>
+                      </>
+                    )}
 
                     {/* Section C — Contribution bar chart */}
                     <Text style={styles.subsectionLabel}>Contributions</Text>
@@ -753,7 +992,7 @@ export default function Dashboard() {
                       <TouchableOpacity
                         style={styles.outlineBtn}
                         onPress={() =>
-                          loadAnalysis(group.string_id, selectedWeeks)
+                          loadAnalysis(group.string_id)
                         }
                         activeOpacity={0.8}
                       >
@@ -786,29 +1025,76 @@ export default function Dashboard() {
           <>
             <Text style={styles.sectionLabel}>Group Comparison</Text>
             <View style={styles.card}>
-              <Text style={styles.subsectionLabel}>
-                Total messages (all time)
-              </Text>
-              {overview.map((group) => {
-                const barPct = Math.round(
-                  (group.total_messages / maxMessages) * 100
-                );
-                return (
-                  <View key={group.string_id} style={styles.barRow}>
-                    <Text style={styles.barLabel}>{group.name}</Text>
-                    <View style={styles.barTrack}>
-                      <View
-                        style={[
-                          styles.barFill,
-                          styles.barFillAmber,
-                          { width: `${barPct}%` },
-                        ]}
-                      />
-                    </View>
-                    <Text style={styles.barValue}>{group.total_messages}</Text>
+              {coursePeriod ? (
+                <>
+                  <View style={styles.weekPickerRow}>
+                    <Text style={styles.weekPickerLabel}>From</Text>
+                    <TouchableOpacity
+                      style={[styles.outlineBtn, { flex: 0, alignSelf: "flex-start", paddingHorizontal: 16 }]}
+                      onPress={() => setShowCompFromPicker(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.outlineBtnText}>Week {compWeekFrom}</Text>
+                    </TouchableOpacity>
                   </View>
-                );
-              })}
+                  <View style={styles.weekPickerRow}>
+                    <Text style={styles.weekPickerLabel}>To</Text>
+                    <TouchableOpacity
+                      style={[styles.outlineBtn, { flex: 0, alignSelf: "flex-start", paddingHorizontal: 16 }]}
+                      onPress={() => setShowCompToPicker(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.outlineBtnText}>Week {compWeekTo}</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.subsectionLabel}>
+                    Messages (Week {compWeekFrom}–{compWeekTo})
+                  </Text>
+                  {comparisonLoading ? (
+                    <ActivityIndicator size="small" color="#1976d2" style={{ marginVertical: 12 }} />
+                  ) : (
+                    overview.map((group) => {
+                      const count = comparisonData[group.string_id] ?? 0;
+                      const barPct = Math.round((count / maxComparisonCount) * 100);
+                      return (
+                        <View key={group.string_id} style={styles.barRow}>
+                          <Text style={styles.barLabel}>{group.name}</Text>
+                          <View style={styles.barTrack}>
+                            <View style={[styles.barFill, styles.barFillAmber, { width: `${barPct}%` }]} />
+                          </View>
+                          <Text style={styles.barValue}>{count}</Text>
+                        </View>
+                      );
+                    })
+                  )}
+                </>
+              ) : (
+                <>
+                  <Text style={styles.subsectionLabel}>
+                    Total messages (all time)
+                  </Text>
+                  {overview.map((group) => {
+                    const barPct = Math.round(
+                      (group.total_messages / maxMessages) * 100
+                    );
+                    return (
+                      <View key={group.string_id} style={styles.barRow}>
+                        <Text style={styles.barLabel}>{group.name}</Text>
+                        <View style={styles.barTrack}>
+                          <View
+                            style={[
+                              styles.barFill,
+                              styles.barFillAmber,
+                              { width: `${barPct}%` },
+                            ]}
+                          />
+                        </View>
+                        <Text style={styles.barValue}>{group.total_messages}</Text>
+                      </View>
+                    );
+                  })}
+                </>
+              )}
             </View>
           </>
         )}
@@ -1065,6 +1351,34 @@ const styles = StyleSheet.create({
   },
   weekBtnTextActive: {
     color: "#ffffff",
+  },
+  weekPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  weekPickerLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#757575",
+    width: 52,
+    marginRight: 8,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  weekPickerItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f4f8",
+  },
+  weekPickerItemText: {
+    fontSize: 15,
+    color: "#1a1a1a",
+  },
+  weekPickerItemActive: {
+    color: "#1976d2",
+    fontWeight: "700",
   },
   barRow: {
     flexDirection: "row",

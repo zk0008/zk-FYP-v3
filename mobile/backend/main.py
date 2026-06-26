@@ -2330,14 +2330,11 @@ def coordinator_groups_overview(
 def coordinator_group_contributions(
     group_id: str,
     weeks: int = Query(4, ge=1, le=52, description="How many weeks back to look"),
+    week_from: int | None = Query(None),
+    week_to: int | None = Query(None),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Per-user message counts for a group over the last N weeks.
-    Useful for spotting who's carrying the conversation and who's gone quiet.
-    Coordinator-only.
-    """
     if current_user.role != "coordinator":
         raise HTTPException(status_code=403, detail="Coordinator access only")
 
@@ -2345,15 +2342,25 @@ def coordinator_group_contributions(
     if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    end_dt = datetime.utcnow()
-    start_dt = end_dt - timedelta(weeks=weeks)
+    if week_from is not None and week_to is not None:
+        cp = db.query(models.CoursePeriod).order_by(models.CoursePeriod.created_at.desc()).first()
+        if not cp:
+            raise HTTPException(status_code=400, detail="No course period set.")
+        start_d = cp.start_date + timedelta(days=(week_from - 1) * 7)
+        end_d = cp.start_date + timedelta(days=week_to * 7)
+        start_dt = datetime(start_d.year, start_d.month, start_d.day)
+        end_dt = datetime(end_d.year, end_d.month, end_d.day)
+    else:
+        end_dt = datetime.utcnow()
+        start_dt = end_dt - timedelta(weeks=weeks)
 
     # pull only human messages — ignore AI replies and system messages with no user
     messages = db.query(models.Message).filter(
         models.Message.group_id == db_group.id,
         models.Message.is_AI == False,
         models.Message.user_id != None,
-        models.Message.timestamp >= start_dt
+        models.Message.timestamp >= start_dt,
+        models.Message.timestamp < end_dt
     ).all()
 
     total_messages = len(messages)
@@ -2382,6 +2389,8 @@ def coordinator_group_contributions(
             "start": start_dt.isoformat() + "Z",
             "end": end_dt.isoformat() + "Z",
         },
+        "week_from": week_from,
+        "week_to": week_to,
     }
 
 
@@ -2389,14 +2398,11 @@ def coordinator_group_contributions(
 def coordinator_group_analysis(
     group_id: str,
     weeks: int = Query(4, ge=1, le=52, description="How many weeks back to analyse"),
+    week_from: int | None = Query(None),
+    week_to: int | None = Query(None),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    AI post-analysis for the coordinator: compares what the group actually
-    discussed in chat against what the students wrote in their summary.
-    Coordinator-only.
-    """
     if current_user.role != "coordinator":
         raise HTTPException(status_code=403, detail="Coordinator access only")
 
@@ -2404,24 +2410,40 @@ def coordinator_group_analysis(
     if not db_group:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    end_dt = datetime.utcnow()
-    start_dt = end_dt - timedelta(weeks=weeks)
+    if week_from is not None and week_to is not None:
+        cp = db.query(models.CoursePeriod).order_by(models.CoursePeriod.created_at.desc()).first()
+        if not cp:
+            raise HTTPException(status_code=400, detail="No course period set.")
+        start_d = cp.start_date + timedelta(days=(week_from - 1) * 7)
+        end_d = cp.start_date + timedelta(days=week_to * 7)
+        start_dt = datetime(start_d.year, start_d.month, start_d.day)
+        end_dt = datetime(end_d.year, end_d.month, end_d.day)
+    else:
+        end_dt = datetime.utcnow()
+        start_dt = end_dt - timedelta(weeks=weeks)
 
     # all messages in the window, oldest first so the transcript reads naturally
     messages = db.query(models.Message).filter(
         models.Message.group_id == db_group.id,
-        models.Message.timestamp >= start_dt
+        models.Message.timestamp >= start_dt,
+        models.Message.timestamp < end_dt
     ).order_by(models.Message.timestamp.asc()).all()
 
     # no point calling GPT-4o if there's nothing to analyse
     if not messages:
+        if week_from is not None and week_to is not None:
+            no_msg_text = f"No messages found for Week {week_from} to Week {week_to}. Nothing to analyse."
+        else:
+            no_msg_text = "No messages found in the selected period. Nothing to analyse."
         return {
-            "analysis_text": f"No messages found in the last {weeks} week(s). Nothing to analyse.",
+            "analysis_text": no_msg_text,
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "date_range": {
                 "start": start_dt.isoformat() + "Z",
                 "end": end_dt.isoformat() + "Z",
             },
+            "week_from": week_from,
+            "week_to": week_to,
         }
 
     # build a plain-text transcript — image messages get a placeholder
@@ -2451,6 +2473,8 @@ def coordinator_group_analysis(
                 "start": start_dt.isoformat() + "Z",
                 "end": end_dt.isoformat() + "Z",
             },
+            "week_from": week_from,
+            "week_to": week_to,
         }
 
     if latest_student:
@@ -2517,4 +2541,6 @@ def coordinator_group_analysis(
             "start": start_dt.isoformat() + "Z",
             "end": end_dt.isoformat() + "Z",
         },
+        "week_from": week_from,
+        "week_to": week_to,
     }
