@@ -66,6 +66,14 @@ type ContributionData = {
   date_range: { start: string; end: string };
 };
 
+type AnalysisResult = {
+  analysis_text: string;
+  summary_period_note: string;
+  edited_ai_copy: boolean;
+  student_summary_text: string | null;
+  ai_summary_copy_text: string | null;
+};
+
 const WEEK_OPTIONS = [1, 2, 4, 8] as const;
 
 export default function Dashboard() {
@@ -127,10 +135,13 @@ export default function Dashboard() {
     Record<string, boolean>
   >({});
 
-  const [analysis, setAnalysis] = useState<Record<string, string>>({});
+  const [analysis, setAnalysis] = useState<Record<string, AnalysisResult>>({});
   const [analysisLoading, setAnalysisLoading] = useState<
     Record<string, boolean>
   >({});
+  const [showSources, setShowSources] = useState<Record<string, boolean>>({});
+  const [showFullStudentSummary, setShowFullStudentSummary] = useState<Record<string, boolean>>({});
+  const [showFullAiCopy, setShowFullAiCopy] = useState<Record<string, boolean>>({});
 
   const [overviewWeekFrom, setOverviewWeekFrom] = useState(1);
   const [overviewWeekTo, setOverviewWeekTo] = useState(1);
@@ -262,15 +273,35 @@ export default function Dashboard() {
         if (!res.ok) throw new Error("Failed to generate analysis");
         return res.json() as Promise<{
           analysis_text: string;
-          generated_at: string;
-          date_range: { start: string; end: string };
+          summary_period_note: string;
+          edited_ai_copy: boolean;
+          student_summary_text: string | null;
+          ai_summary_copy_text: string | null;
         }>;
       })
       .then((data) =>
-        setAnalysis((prev) => ({ ...prev, [key]: data.analysis_text }))
+        setAnalysis((prev) => ({
+          ...prev,
+          [key]: {
+            analysis_text: data.analysis_text,
+            summary_period_note: data.summary_period_note ?? "",
+            edited_ai_copy: data.edited_ai_copy ?? false,
+            student_summary_text: data.student_summary_text ?? null,
+            ai_summary_copy_text: data.ai_summary_copy_text ?? null,
+          },
+        }))
       )
       .catch((e: Error) =>
-        setAnalysis((prev) => ({ ...prev, [key]: `Error: ${e.message}` }))
+        setAnalysis((prev) => ({
+          ...prev,
+          [key]: {
+            analysis_text: `Error: ${e.message}`,
+            summary_period_note: "",
+            edited_ai_copy: false,
+            student_summary_text: null,
+            ai_summary_copy_text: null,
+          },
+        }))
       )
       .finally(() =>
         setAnalysisLoading((prev) => ({ ...prev, [key]: false }))
@@ -828,7 +859,7 @@ export default function Dashboard() {
               : `${group.string_id}-${selectedWeeks}`;
             const contribData = contributions[cKey];
             const isContribLoading = !!contribLoading[cKey];
-            const analysisText = analysis[cKey];
+            const analysisData = analysis[cKey];
             const isAnalysisLoading = !!analysisLoading[cKey];
 
             return (
@@ -988,12 +1019,10 @@ export default function Dashboard() {
                     <Text style={[styles.subsectionLabel, { marginTop: 16 }]}>
                       AI Analysis
                     </Text>
-                    {!analysisText && !isAnalysisLoading && (
+                    {!analysisData && !isAnalysisLoading && (
                       <TouchableOpacity
                         style={styles.outlineBtn}
-                        onPress={() =>
-                          loadAnalysis(group.string_id)
-                        }
+                        onPress={() => loadAnalysis(group.string_id)}
                         activeOpacity={0.8}
                       >
                         <Text style={styles.outlineBtnText}>
@@ -1009,9 +1038,82 @@ export default function Dashboard() {
                         </Text>
                       </View>
                     )}
-                    {analysisText && !isAnalysisLoading && (
+                    {analysisData && !isAnalysisLoading && (
                       <View style={styles.analysisCard}>
-                        <Text style={styles.analysisText}>{analysisText}</Text>
+                        {!!analysisData.summary_period_note && (
+                          <Text style={[styles.mutedText, { marginBottom: 8 }]}>
+                            {analysisData.summary_period_note}
+                          </Text>
+                        )}
+                        {(analysisData.student_summary_text || analysisData.ai_summary_copy_text) && (
+                          <View style={styles.sourcesSection}>
+                            <TouchableOpacity
+                              style={styles.sourcesToggle}
+                              onPress={() =>
+                                setShowSources((prev) => ({ ...prev, [cKey]: !prev[cKey] }))
+                              }
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.sourcesToggleText}>
+                                {showSources[cKey] ? "Hide sources ▴" : "Show sources ▾"}
+                              </Text>
+                            </TouchableOpacity>
+                            {showSources[cKey] && (
+                              <>
+                                {analysisData.student_summary_text && (
+                                  <>
+                                    <Text style={styles.sourceLabel}>Student summary:</Text>
+                                    <Text style={styles.sourcePreview}>
+                                      {analysisData.student_summary_text.length > 150 && !showFullStudentSummary[cKey]
+                                        ? analysisData.student_summary_text.slice(0, 150) + "..."
+                                        : analysisData.student_summary_text}
+                                    </Text>
+                                    {analysisData.student_summary_text.length > 150 && (
+                                      <TouchableOpacity
+                                        onPress={() =>
+                                          setShowFullStudentSummary((prev) => ({ ...prev, [cKey]: !prev[cKey] }))
+                                        }
+                                        activeOpacity={0.7}
+                                      >
+                                        <Text style={styles.sourcesToggleText}>
+                                          {showFullStudentSummary[cKey] ? "Show less" : "Show more"}
+                                        </Text>
+                                      </TouchableOpacity>
+                                    )}
+                                  </>
+                                )}
+                                {analysisData.ai_summary_copy_text && (
+                                  <>
+                                    <Text style={styles.sourceLabel}>AI summary copy:</Text>
+                                    <Text style={styles.sourcePreview}>
+                                      {analysisData.ai_summary_copy_text.length > 150 && !showFullAiCopy[cKey]
+                                        ? analysisData.ai_summary_copy_text.slice(0, 150) + "..."
+                                        : analysisData.ai_summary_copy_text}
+                                    </Text>
+                                    {analysisData.ai_summary_copy_text.length > 150 && (
+                                      <TouchableOpacity
+                                        onPress={() =>
+                                          setShowFullAiCopy((prev) => ({ ...prev, [cKey]: !prev[cKey] }))
+                                        }
+                                        activeOpacity={0.7}
+                                      >
+                                        <Text style={styles.sourcesToggleText}>
+                                          {showFullAiCopy[cKey] ? "Show less" : "Show more"}
+                                        </Text>
+                                      </TouchableOpacity>
+                                    )}
+                                    {analysisData.edited_ai_copy && (
+                                      <Text style={styles.editedNote}>
+                                        Student edited the AI summary copy
+                                      </Text>
+                                    )}
+                                  </>
+                                )}
+                              </>
+                            )}
+                          </View>
+                        )}
+                        <Text style={styles.analysisText}>{analysisData.analysis_text}</Text>
                       </View>
                     )}
                   </View>
@@ -1448,6 +1550,41 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#1a1a1a",
     lineHeight: 20,
+  },
+  sourcesSection: {
+    marginBottom: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#e8edf2",
+    paddingTop: 8,
+  },
+  sourcesToggle: {
+    alignSelf: "flex-start",
+    paddingVertical: 4,
+  },
+  sourcesToggleText: {
+    fontSize: 12,
+    color: "#1976d2",
+    fontWeight: "600",
+  },
+  sourceLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#757575",
+    marginTop: 8,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  sourcePreview: {
+    fontSize: 12,
+    color: "#424242",
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  editedNote: {
+    fontSize: 11,
+    color: "#e65100",
+    marginTop: 4,
+    fontWeight: "600",
   },
   cpPickerRow: {
     flexDirection: "row",

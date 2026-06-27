@@ -2422,6 +2422,39 @@ def coordinator_group_analysis(
         end_dt = datetime.utcnow()
         start_dt = end_dt - timedelta(weeks=weeks)
 
+    # format a UTC datetime as "27 Jun 2026, 23:59" in SGT (UTC+8)
+    def _fmt_sgt(dt: datetime) -> str:
+        return (dt + timedelta(hours=8)).strftime("%d %b %Y, %H:%M")
+
+    # prefer a summary submitted within the selected period; fall back to most recent
+    latest_student = db.query(models.StudentSummary).filter(
+        models.StudentSummary.group_id == group_id,
+        models.StudentSummary.created_at >= start_dt,
+        models.StudentSummary.created_at <= end_dt,
+    ).order_by(models.StudentSummary.created_at.desc()).first()
+
+    if latest_student:
+        summary_period_note = f"Submitted on {_fmt_sgt(latest_student.created_at)}"
+    else:
+        latest_student = db.query(models.StudentSummary).filter(
+            models.StudentSummary.group_id == group_id
+        ).order_by(models.StudentSummary.created_at.desc()).first()
+        if latest_student:
+            summary_period_note = (
+                f"No summary was submitted for this period. "
+                f"Using most recent submission from {_fmt_sgt(latest_student.created_at)}"
+            )
+        else:
+            summary_period_note = "No student summary has been submitted yet."
+
+    # true only when the student actually changed the AI draft before submitting
+    edited_ai_copy = bool(
+        latest_student
+        and latest_student.summary_text
+        and latest_student.ai_summary_copy
+        and latest_student.summary_text != latest_student.ai_summary_copy
+    )
+
     # all messages in the window, oldest first so the transcript reads naturally
     messages = db.query(models.Message).filter(
         models.Message.group_id == db_group.id,
@@ -2444,6 +2477,10 @@ def coordinator_group_analysis(
             },
             "week_from": week_from,
             "week_to": week_to,
+            "summary_period_note": summary_period_note,
+            "edited_ai_copy": edited_ai_copy,
+            "student_summary_text": latest_student.summary_text if latest_student else None,
+            "ai_summary_copy_text": latest_student.ai_summary_copy if latest_student else None,
         }
 
     # build a plain-text transcript — image messages get a placeholder
@@ -2460,11 +2497,6 @@ def coordinator_group_analysis(
             transcript_lines.append(f"[{ts}] {sender}: {msg.content}")
     transcript = "\n".join(transcript_lines)
 
-    # latest student summary for this group — may not exist yet
-    latest_student = db.query(models.StudentSummary).filter(
-        models.StudentSummary.group_id == group_id
-    ).order_by(models.StudentSummary.created_at.desc()).first()
-
     if not openai_client:
         return {
             "analysis_text": "Error: OPENAI_API_KEY environment variable not set. Please configure your API key.",
@@ -2475,25 +2507,29 @@ def coordinator_group_analysis(
             },
             "week_from": week_from,
             "week_to": week_to,
+            "summary_period_note": summary_period_note,
+            "edited_ai_copy": edited_ai_copy,
+            "student_summary_text": latest_student.summary_text if latest_student else None,
+            "ai_summary_copy_text": latest_student.ai_summary_copy if latest_student else None,
         }
 
     if latest_student:
         system_prompt = (
             "You are an academic coordinator reviewing a student group's progress. "
             "You have the group's chat transcript and their student-written weekly summary. "
-            "Compare what actually happened in the chat with what the students reported.\n\n"
-            "Structure your response exactly like this (plain text, no markdown headings or bold):\n\n"
+            "Compare what actually happened in the chat with what the students reported. "
+            "Be specific — cite actual topics, questions, or decisions from the chat when identifying gaps or discrepancies.\n\n"
+            "Structure your response exactly like this (plain text, no markdown):\n\n"
             "What the students reported accurately:\n"
-            "- (bullet points)\n\n"
+            "- (cite specific examples from the chat that match the summary)\n\n"
             "Gaps — things discussed in chat but missing from the summary:\n"
-            "- (bullet points)\n\n"
-            "Discrepancies — anything in the summary that doesn't match the chat:\n"
-            "- (bullet points, or 'None found' if everything checks out)\n\n"
+            "- (each gap labelled as Minor, Moderate, or Significant)\n\n"
+            "Discrepancies — anything in the summary that does not match the chat:\n"
+            "- (each discrepancy labelled as Minor, Moderate, or Significant, or 'None found' if everything checks out)\n\n"
             "Coordinator recommendations:\n"
-            "- (2-3 specific, actionable steps)\n\n"
+            "- (2-3 specific actionable steps referencing actual topics from the chat)\n\n"
             f"Student-written summary:\n{latest_student.summary_text}"
         )
-        # if we have the AI-generated copy the students saw, give that as extra context
         if latest_student.ai_summary_copy:
             system_prompt += (
                 f"\n\nAI-generated summary (the copy the students had access to when writing theirs):\n"
@@ -2503,18 +2539,27 @@ def coordinator_group_analysis(
         # no summary submitted — analyse the chat alone and flag the absence
         system_prompt = (
             "You are an academic coordinator reviewing a student group's progress. "
-            "You have the group's chat transcript. "
-            "The students have not yet submitted a weekly summary for this group.\n\n"
-            "Based on the chat transcript alone, provide the following (plain text, no markdown headings or bold):\n\n"
+            "You have the group's chat transcript only — no student summary has been submitted. "
+            "Analyse the chat and provide the following (plain text, no markdown):\n\n"
             "What the group has been working on:\n"
-            "- (bullet points)\n\n"
-            "Key discussion points and questions raised:\n"
-            "- (bullet points)\n\n"
-            "Concerns visible from the chat (confusion, lack of progress, dropped threads, etc.):\n"
-            "- (bullet points, or 'None identified' if things look fine)\n\n"
+            "- (cite specific topics, tasks, or questions from the chat)\n\n"
+            "Activity level:\n"
+            "- Estimate how active the group is based on message frequency and depth of discussion "
+            "(Very active / Moderately active / Low activity)\n"
+            "- Note any periods of silence or sudden drop in participation\n\n"
+            "Concerns visible from the chat:\n"
+            "- (flag confusion, unresolved questions, dropped threads, or lack of progress — "
+            "or 'None identified' if things look fine)\n\n"
             "Coordinator recommendations:\n"
-            "- (2-3 specific, actionable steps)\n\n"
-            "Note: no student summary has been submitted yet — flag this as a priority if the deadline is approaching."
+            "- (2-3 specific actionable steps referencing actual topics from the chat)\n\n"
+            "Note: no student summary has been submitted — flag this as a priority if the deadline is approaching."
+        )
+
+    user_prompt = f"Chat transcript ({weeks} week(s), {len(messages)} messages):\n\n{transcript}"
+    if edited_ai_copy and latest_student and latest_student.ai_summary_copy:
+        user_prompt += (
+            "\n\nNote: the students edited the AI-generated summary before writing their own. "
+            "Their edits may indicate what they chose to emphasise or omit."
         )
 
     try:
@@ -2522,10 +2567,7 @@ def coordinator_group_analysis(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": f"Chat transcript ({weeks} week(s), {len(messages)} messages):\n\n{transcript}"
-                },
+                {"role": "user", "content": user_prompt},
             ],
             max_tokens=800,
             temperature=0.7
@@ -2543,4 +2585,8 @@ def coordinator_group_analysis(
         },
         "week_from": week_from,
         "week_to": week_to,
+        "summary_period_note": summary_period_note,
+        "edited_ai_copy": edited_ai_copy,
+        "student_summary_text": latest_student.summary_text if latest_student else None,
+        "ai_summary_copy_text": latest_student.ai_summary_copy if latest_student else None,
     }
