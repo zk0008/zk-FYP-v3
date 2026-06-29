@@ -114,6 +114,15 @@ export default function Groups() {
               <Text style={styles.dashboardText}>Dashboard</Text>
             </TouchableOpacity>
           )}
+          {user?.role === "supervisor" && (
+            <TouchableOpacity
+              style={styles.dashboardBtn}
+              onPress={() => router.push("/supervisor-dashboard")}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.dashboardText}>Dashboard</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={styles.logoutBtn}
             onPress={handleLogout}

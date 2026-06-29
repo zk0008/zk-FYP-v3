@@ -2626,3 +2626,332 @@ def coordinator_group_analysis(
         "student_summary_text": latest_student.summary_text if latest_student else None,
         "ai_summary_copy_text": latest_student.ai_summary_copy if latest_student else None,
     }
+
+
+@app.get("/supervisor/groups/overview")
+def supervisor_groups_overview(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "supervisor":
+        raise HTTPException(status_code=403, detail="Supervisor access only")
+
+    memberships = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == current_user.id
+    ).all()
+    member_group_ids = [m.group_id for m in memberships]
+    groups = db.query(models.Group).filter(
+        models.Group.id.in_(member_group_ids)
+    ).all()
+
+    def extract_group_number(name):
+        match = re.search(r'\d+', name)
+        return int(match.group()) if match else 999
+
+    sorted_groups = sorted(groups, key=lambda g: extract_group_number(g.name))
+
+    result = []
+    for group in sorted_groups:
+        latest_ai = db.query(models.Summary).filter(
+            models.Summary.group_id == group.string_id
+        ).order_by(models.Summary.created_at.desc()).first()
+
+        latest_student = db.query(models.StudentSummary).filter(
+            models.StudentSummary.group_id == group.string_id
+        ).order_by(models.StudentSummary.created_at.desc()).first()
+
+        total_messages = db.query(models.Message).filter(
+            models.Message.group_id == group.id,
+            models.Message.is_AI == False
+        ).count()
+
+        result.append({
+            "id": group.id,
+            "name": group.name,
+            "string_id": group.string_id,
+            "ai_summary": {
+                "summary_text": latest_ai.summary_text,
+                "created_at": latest_ai.created_at.isoformat() + "Z",
+            } if latest_ai else None,
+            "student_summary": {
+                "summary_text": latest_student.summary_text,
+                "is_submitted": latest_student.is_submitted,
+                "submitted_at": latest_student.submitted_at.isoformat() + "Z" if latest_student.submitted_at else None,
+                "is_late": latest_student.is_late,
+            } if latest_student else None,
+            "total_messages": total_messages,
+        })
+
+    return result
+
+
+@app.get("/supervisor/groups/{group_id}/contributions")
+def supervisor_group_contributions(
+    group_id: str,
+    weeks: int = Query(4, ge=1, le=52, description="How many weeks back to look"),
+    week_from: int | None = Query(None),
+    week_to: int | None = Query(None),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "supervisor":
+        raise HTTPException(status_code=403, detail="Supervisor access only")
+
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    membership = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == current_user.id,
+        models.GroupMember.group_id == db_group.id
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if week_from is not None and week_to is not None:
+        cp = db.query(models.CoursePeriod).order_by(models.CoursePeriod.created_at.desc()).first()
+        if not cp:
+            raise HTTPException(status_code=400, detail="No course period set.")
+        start_d = cp.start_date + timedelta(days=(week_from - 1) * 7)
+        end_d = cp.start_date + timedelta(days=week_to * 7)
+        start_dt = datetime(start_d.year, start_d.month, start_d.day)
+        end_dt = datetime(end_d.year, end_d.month, end_d.day)
+    else:
+        end_dt = datetime.utcnow()
+        start_dt = end_dt - timedelta(weeks=weeks)
+
+    messages = db.query(models.Message).filter(
+        models.Message.group_id == db_group.id,
+        models.Message.is_AI == False,
+        models.Message.user_id != None,
+        models.Message.timestamp >= start_dt,
+        models.Message.timestamp < end_dt
+    ).all()
+
+    total_messages = len(messages)
+
+    counts: dict[int, int] = {}
+    for msg in messages:
+        counts[msg.user_id] = counts.get(msg.user_id, 0) + 1
+
+    contributions = []
+    for user_id, count in counts.items():
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        username = user.username if user else f"user_{user_id}"
+        percentage = round(count / total_messages * 100, 1) if total_messages > 0 else 0.0
+        contributions.append({
+            "username": username,
+            "message_count": count,
+            "percentage": percentage,
+        })
+
+    contributions.sort(key=lambda x: x["message_count"], reverse=True)
+
+    return {
+        "contributions": contributions,
+        "total_messages": total_messages,
+        "date_range": {
+            "start": start_dt.isoformat() + "Z",
+            "end": end_dt.isoformat() + "Z",
+        },
+        "week_from": week_from,
+        "week_to": week_to,
+    }
+
+
+@app.get("/supervisor/groups/{group_id}/analysis")
+def supervisor_group_analysis(
+    group_id: str,
+    weeks: int = Query(4, ge=1, le=52),
+    week_from: int | None = Query(None),
+    week_to: int | None = Query(None),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "supervisor":
+        raise HTTPException(status_code=403, detail="Supervisor access only")
+
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    membership = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == current_user.id,
+        models.GroupMember.group_id == db_group.id
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if week_from is not None and week_to is not None:
+        cp = db.query(models.CoursePeriod).order_by(models.CoursePeriod.created_at.desc()).first()
+        if not cp:
+            raise HTTPException(status_code=400, detail="No course period set.")
+        start_d = cp.start_date + timedelta(days=(week_from - 1) * 7)
+        end_d = cp.start_date + timedelta(days=week_to * 7)
+        start_dt = datetime(start_d.year, start_d.month, start_d.day)
+        end_dt = datetime(end_d.year, end_d.month, end_d.day)
+    else:
+        end_dt = datetime.utcnow()
+        start_dt = end_dt - timedelta(weeks=weeks)
+
+    def _fmt_sgt(dt: datetime) -> str:
+        return (dt + timedelta(hours=8)).strftime("%d %b %Y, %H:%M")
+
+    latest_student = db.query(models.StudentSummary).filter(
+        models.StudentSummary.group_id == group_id,
+        models.StudentSummary.created_at >= start_dt,
+        models.StudentSummary.created_at <= end_dt,
+    ).order_by(models.StudentSummary.created_at.desc()).first()
+
+    if latest_student:
+        summary_period_note = f"Submitted on {_fmt_sgt(latest_student.created_at)}"
+    else:
+        latest_student = db.query(models.StudentSummary).filter(
+            models.StudentSummary.group_id == group_id
+        ).order_by(models.StudentSummary.created_at.desc()).first()
+        if latest_student:
+            summary_period_note = (
+                f"No summary was submitted for this period. "
+                f"Using most recent submission from {_fmt_sgt(latest_student.created_at)}"
+            )
+        else:
+            summary_period_note = "No student summary has been submitted yet."
+
+    edited_ai_copy = bool(
+        latest_student
+        and latest_student.summary_text
+        and latest_student.ai_summary_copy
+        and latest_student.summary_text != latest_student.ai_summary_copy
+    )
+
+    messages = db.query(models.Message).filter(
+        models.Message.group_id == db_group.id,
+        models.Message.timestamp >= start_dt,
+        models.Message.timestamp < end_dt
+    ).order_by(models.Message.timestamp.asc()).all()
+
+    if not messages:
+        if week_from is not None and week_to is not None:
+            no_msg_text = f"No messages found for Week {week_from} to Week {week_to}. Nothing to analyse."
+        else:
+            no_msg_text = "No messages found in the selected period. Nothing to analyse."
+        return {
+            "analysis_text": no_msg_text,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "date_range": {
+                "start": start_dt.isoformat() + "Z",
+                "end": end_dt.isoformat() + "Z",
+            },
+            "week_from": week_from,
+            "week_to": week_to,
+            "summary_period_note": summary_period_note,
+            "edited_ai_copy": edited_ai_copy,
+            "student_summary_text": latest_student.summary_text if latest_student else None,
+            "ai_summary_copy_text": latest_student.ai_summary_copy if latest_student else None,
+        }
+
+    transcript_lines = []
+    for msg in messages:
+        ts = msg.timestamp.strftime("%Y-%m-%d %H:%M")
+        if msg.is_AI:
+            sender = "AI Bot"
+        else:
+            sender = msg.user.username if msg.user else "Unknown"
+        if (msg.message_type or "text") == "image":
+            transcript_lines.append(f"[{ts}] {sender}: [sent an image]")
+        else:
+            transcript_lines.append(f"[{ts}] {sender}: {msg.content}")
+    transcript = "\n".join(transcript_lines)
+
+    if not openai_client:
+        return {
+            "analysis_text": "Error: OPENAI_API_KEY environment variable not set. Please configure your API key.",
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "date_range": {
+                "start": start_dt.isoformat() + "Z",
+                "end": end_dt.isoformat() + "Z",
+            },
+            "week_from": week_from,
+            "week_to": week_to,
+            "summary_period_note": summary_period_note,
+            "edited_ai_copy": edited_ai_copy,
+            "student_summary_text": latest_student.summary_text if latest_student else None,
+            "ai_summary_copy_text": latest_student.ai_summary_copy if latest_student else None,
+        }
+
+    if latest_student:
+        system_prompt = (
+            "You are an academic supervisor reviewing a student group's progress. "
+            "You have the group's chat transcript and their student-written weekly summary. "
+            "Compare what actually happened in the chat with what the students reported. "
+            "Be specific — cite actual topics, questions, or decisions from the chat when identifying gaps or discrepancies.\n\n"
+            "Structure your response exactly like this (plain text, no markdown):\n\n"
+            "What the students reported accurately:\n"
+            "- (cite specific examples from the chat that match the summary)\n\n"
+            "Gaps — things discussed in chat but missing from the summary:\n"
+            "- (each gap labelled as Minor, Moderate, or Significant)\n\n"
+            "Discrepancies — anything in the summary that does not match the chat:\n"
+            "- (each discrepancy labelled as Minor, Moderate, or Significant, or 'None found' if everything checks out)\n\n"
+            "Coordinator recommendations:\n"
+            "- (2-3 specific actionable steps referencing actual topics from the chat)\n\n"
+            f"Student-written summary:\n{latest_student.summary_text}"
+        )
+        if latest_student.ai_summary_copy:
+            system_prompt += (
+                f"\n\nAI-generated summary (the copy the students had access to when writing theirs):\n"
+                f"{latest_student.ai_summary_copy}"
+            )
+    else:
+        system_prompt = (
+            "You are an academic supervisor reviewing a student group's progress. "
+            "You have the group's chat transcript only — no student summary has been submitted. "
+            "Analyse the chat and provide the following (plain text, no markdown):\n\n"
+            "What the group has been working on:\n"
+            "- (cite specific topics, tasks, or questions from the chat)\n\n"
+            "Activity level:\n"
+            "- Estimate how active the group is based on message frequency and depth of discussion "
+            "(Very active / Moderately active / Low activity)\n"
+            "- Note any periods of silence or sudden drop in participation\n\n"
+            "Concerns visible from the chat:\n"
+            "- (flag confusion, unresolved questions, dropped threads, or lack of progress — "
+            "or 'None identified' if things look fine)\n\n"
+            "Coordinator recommendations:\n"
+            "- (2-3 specific actionable steps referencing actual topics from the chat)\n\n"
+            "Note: no student summary has been submitted — flag this as a priority if the deadline is approaching."
+        )
+
+    user_prompt = f"Chat transcript ({weeks} week(s), {len(messages)} messages):\n\n{transcript}"
+    if edited_ai_copy and latest_student and latest_student.ai_summary_copy:
+        user_prompt += (
+            "\n\nNote: the students edited the AI-generated summary before writing their own. "
+            "Their edits may indicate what they chose to emphasise or omit."
+        )
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=800,
+            temperature=0.7
+        )
+        analysis_text = response.choices[0].message.content
+    except Exception as e:
+        analysis_text = f"Error: Failed to generate analysis. {str(e)}"
+
+    return {
+        "analysis_text": analysis_text,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "date_range": {
+            "start": start_dt.isoformat() + "Z",
+            "end": end_dt.isoformat() + "Z",
+        },
+        "week_from": week_from,
+        "week_to": week_to,
+        "summary_period_note": summary_period_note,
+        "edited_ai_copy": edited_ai_copy,
+        "student_summary_text": latest_student.summary_text if latest_student else None,
+        "ai_summary_copy_text": latest_student.ai_summary_copy if latest_student else None,
+    }

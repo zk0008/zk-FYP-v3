@@ -76,7 +76,7 @@ zk-FYP-v3/
 
 ---
 
-## Phase 6 — Supervisor Dashboard
+## Phase 6 — Supervisor Dashboard ✓ Complete
 
 **Group overview**
 - Supervisors can view an overview of their assigned groups only
