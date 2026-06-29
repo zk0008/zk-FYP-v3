@@ -19,9 +19,9 @@ _embed_client = OpenAI(api_key=_openai_api_key) if _openai_api_key else None
 _chroma = chromadb.PersistentClient(path="chroma_store")
 
 
-def chunk_text(text, chunk_size=500, overlap=100):
+def chunk_text(text, chunk_size=200, overlap=50):
     # Split on whitespace, then slide a window of chunk_size words
-    # with a 100-word overlap so nothing important falls between chunks
+    # with a 50-word overlap so nothing important falls between chunks
     words = text.split()
     chunks = []
     start = 0
@@ -54,7 +54,7 @@ def _embed(texts):
     return [item.embedding for item in response.data]
 
 
-def index_document(group_id, filename, text):
+def index_document(group_id, filename, text, original_filename=None):
     # Wipe any old chunks for this filename first so re-uploads don't double-index
     collection = _get_collection(group_id)
     existing = collection.get(where={"filename": filename})
@@ -68,8 +68,15 @@ def index_document(group_id, filename, text):
     # Embed everything in one API call — cheaper than one call per chunk
     embeddings = _embed(chunks)
 
+    # original_filename is what the user called the file before we timestamped it.
+    # Store it so filename detection can match "report.pdf" in a query even though
+    # the safe key is "20240622_143021_report.pdf".
+    display_name = original_filename if original_filename else filename
     ids = [f"{filename}::{i}" for i in range(len(chunks))]
-    metadatas = [{"filename": filename, "chunk_index": i} for i in range(len(chunks))]
+    metadatas = [
+        {"filename": filename, "chunk_index": i, "original_filename": display_name}
+        for i in range(len(chunks))
+    ]
 
     collection.add(
         ids=ids,
@@ -79,7 +86,7 @@ def index_document(group_id, filename, text):
     )
 
 
-def get_relevant_context(group_id, query, top_k=40, top_n=10):
+def get_relevant_context(group_id, query, top_k=80, top_n=10):
     # Returns (chunks, top_score) where chunks is a list of
     # {text, filename, chunk_index, score} dicts and top_score is the best
     # cross-encoder score — the caller uses it for the threshold check.
@@ -95,14 +102,27 @@ def get_relevant_context(group_id, query, top_k=40, top_n=10):
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=min(top_k, collection.count()),
-        include=["documents", "metadatas"]
+        include=["documents", "metadatas", "distances"]
     )
 
     candidate_texts = results["documents"][0]
     candidate_metas = results["metadatas"][0]
+    candidate_distances = results["distances"][0]
 
     if not candidate_texts:
         return [], -999.0
+
+    # Drop anything with cosine distance > 0.8 (similarity < 0.2) — not worth reranking.
+    # ChromaDB cosine distance = 1 - cosine_similarity, so 0.8 distance = 0.2 similarity.
+    filtered = [
+        (text, meta)
+        for text, meta, dist in zip(candidate_texts, candidate_metas, candidate_distances)
+        if dist <= 0.8
+    ]
+    if not filtered:
+        return [], -999.0
+    candidate_texts = [item[0] for item in filtered]
+    candidate_metas = [item[1] for item in filtered]
 
     # Cross-encoder scores each (query, passage) pair — much more precise than cosine distance
     if reranker:
@@ -150,3 +170,94 @@ def get_top_document(chunks):
     }
 
     return max(avg_scores, key=avg_scores.get)
+
+
+def get_top_chunks_for_document(group_id, query, filename, top_n=5):
+    # Pull every chunk for the named file then rerank them against the query.
+    # Case 2 calls this instead of dumping the whole PDF — avoids token bloat
+    # on long documents and still surfaces the most relevant pages.
+    try:
+        collection = _get_collection(group_id)
+    except Exception:
+        return []
+
+    if collection.count() == 0:
+        return []
+
+    result = collection.get(
+        where={"filename": filename},
+        include=["documents"]
+    )
+
+    if not result["ids"]:
+        return []
+
+    texts = result["documents"]
+    if not texts:
+        return []
+
+    if reranker:
+        pairs = [(query, text) for text in texts]
+        scores = reranker.predict(pairs).tolist()
+        ranked = sorted(
+            zip(scores, texts),
+            key=lambda x: x[0],
+            reverse=True
+        )[:top_n]
+        return [text for _, text in ranked]
+    else:
+        # No reranker — return first top_n chunks in page order
+        paired = sorted(
+            zip(result["ids"], texts),
+            key=lambda x: int(x[0].split("::")[-1])
+        )
+        return [text for _, text in paired[:top_n]]
+
+
+def get_chunks_by_filename(group_id, filename):
+    # Fetch every stored chunk for a specific file, in page order.
+    # Useful when the user names a file explicitly — skip cosine search entirely.
+    try:
+        collection = _get_collection(group_id)
+    except Exception:
+        return []
+
+    if collection.count() == 0:
+        return []
+
+    result = collection.get(
+        where={"filename": filename},
+        include=["documents"]
+    )
+
+    if not result["ids"]:
+        return []
+
+    # IDs are "{filename}::{chunk_index}" — sort by the numeric suffix
+    paired = sorted(
+        zip(result["ids"], result["documents"]),
+        key=lambda x: int(x[0].split("::")[-1])
+    )
+    return [text for _, text in paired]
+
+
+def list_indexed_filenames(group_id):
+    # returns [{safe_filename, original_filename}] for every unique file indexed in this group
+    try:
+        collection = _get_collection(group_id)
+    except Exception:
+        return []
+
+    if collection.count() == 0:
+        return []
+
+    result = collection.get(include=["metadatas"])
+    seen = set()
+    filenames = []
+    for meta in result["metadatas"]:
+        fname = meta.get("filename", "")
+        if fname and fname not in seen:
+            seen.add(fname)
+            orig = meta.get("original_filename", fname)
+            filenames.append({"safe_filename": fname, "original_filename": orig})
+    return filenames

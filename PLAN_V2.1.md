@@ -65,14 +65,14 @@ zk-FYP-v3/
 
 ---
 
-## Phase 5 — Document Fetching Fix (RAG)
+## Phase 5 — Document Fetching Fix (RAG) ✓ Complete
 
 **Retrieval accuracy**
-- Investigate and fix the issue where @ai cannot retrieve information from a
-  specific page in a large PDF document
-- The RAG pipeline finds the correct document but fails to surface content
-  from the relevant page when the document has many pages
-- Review chunking strategy, retrieval parameters, and reranker threshold
+- Reduced chunk size from 500 to 200 words with 50-word overlap for more precise retrieval
+- Increased top_k from 40 to 80 and added cosine distance pre-filter before reranking
+- Added filename detection so @ai can find documents by their display name
+- Added original_filename to ChromaDB metadata for accurate human-readable matching
+- Replaced Case 2 full PDF read with top-chunk retrieval for large document fallback
 
 ---
 

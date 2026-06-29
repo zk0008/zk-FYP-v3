@@ -22,7 +22,7 @@ from tavily import TavilyClient
 from database import Base, SessionLocal, get_db, engine
 import models  # Import models so Alembic can see them
 from auth import hash_password, decode_token, verify_password, create_access_token
-from rag import index_document, get_relevant_context, get_top_document
+from rag import index_document, get_relevant_context, get_top_document, get_top_chunks_for_document, get_chunks_by_filename, list_indexed_filenames
 from websocket_manager import manager
 
 app = FastAPI(title="Group Chat Prototype")
@@ -441,9 +441,6 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
             return
 
         try:
-            # Ask the RAG pipeline for the most relevant chunks and its confidence
-            chunks, top_score = get_relevant_context(group_id, question)
-
             # Fetch last 10 messages for conversation context
             recent_messages = db.query(models.Message).filter(
                 models.Message.group_id == db_group_id
@@ -474,70 +471,68 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
             sources = []
             ai_text = ""
 
-            if top_score >= 0.0:
-                # --- Case 1: RAG path ---
-                # Top chunks scored well — answer directly from them
-                print(f"[RAG] Case 1 triggered — answering from document chunks")
-                context_parts = [
-                    f"[{chunk['filename']}]\n{chunk['text']}"
-                    for chunk in chunks
-                ]
-                context_str = "\n\n".join(context_parts)
+            # --- Filename detection: if the query names a specific uploaded file,
+            # pull all its chunks directly and skip the cosine search entirely ---
+            query_lower = question.lower()
+            indexed_filenames = list_indexed_filenames(group_id)
 
-                system_message = (
-                    "Answer the question using ONLY the context passages provided below. "
-                    "Each passage is labelled with its source file in square brackets. "
-                    "Cite the source inline as [filename.pdf] when you use information from it. "
-                    "Do not use general knowledge. Do not make up information.\n\n"
-                    "Context:\n\n" + context_str
+            # Try matching on the human-readable original name first (e.g. "report.pdf"),
+            # then fall back to safe_filename for docs indexed before original_filename was tracked
+            matched_entry = next(
+                (e for e in indexed_filenames if e["original_filename"].lower() in query_lower),
+                None
+            )
+            if not matched_entry:
+                matched_entry = next(
+                    (e for e in indexed_filenames if e["safe_filename"].lower() in query_lower),
+                    None
                 )
 
-                messages = [{"role": "system", "content": system_message}]
-                messages.extend(conversation_history)
-                messages.append({"role": "user", "content": question})
-
-                response = openai_client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=messages,
-                    max_tokens=500,
-                    temperature=0.7
-                )
-                ai_text = response.choices[0].message.content
-
-                sources = [
-                    {"type": "doc", "filename": c["filename"], "chunk_index": c["chunk_index"]}
-                    for c in chunks
-                ]
-
-            else:
-                # --- Case 2: Full document fallback ---
-                # Chunks scored too low — find the best-matching document and
-                # pass its full text so GPT-4o has a fair chance to answer
-                fallback_filename = get_top_document(chunks) if chunks else None
-                print(f"[RAG] Case 2 triggered — full document fallback: {fallback_filename}")
-                fallback_text = ""
-
-                if fallback_filename:
-                    doc_record = db.query(models.Document).filter(
-                        models.Document.group_id == group_id,
-                        models.Document.filename == fallback_filename
-                    ).first()
-                    if doc_record and Path(doc_record.stored_path).exists():
-                        try:
-                            reader = PdfReader(Path(doc_record.stored_path))
-                            fallback_text = "\n".join(
-                                page.extract_text() or "" for page in reader.pages
-                            )
-                        except Exception:
-                            fallback_text = ""
-
-                if fallback_text.strip():
+            if matched_entry:
+                matched_safe = matched_entry["safe_filename"]
+                matched_display = matched_entry["original_filename"]
+                print(f"[RAG] Filename match — serving all chunks for: {matched_safe}")
+                file_chunks = get_chunks_by_filename(group_id, matched_safe)
+                if file_chunks:
+                    context_str = "\n\n---\n\n".join(file_chunks)
                     system_message = (
                         f"Answer the question using ONLY the document provided below. "
-                        f"Cite the source inline as [{fallback_filename}] when you use information from it. "
-                        f"If the answer is genuinely not in the document, reply with exactly: "
-                        f"\"{REFUSAL_PHRASE}\"\n\n"
-                        f"Document:\n\n{fallback_text}"
+                        f"Cite the source inline as [{matched_display}] when you use information from it. "
+                        f"Do not use general knowledge. Do not make up information.\n\n"
+                        f"Document ({matched_display}):\n\n{context_str}"
+                    )
+                    messages = [{"role": "system", "content": system_message}]
+                    messages.extend(conversation_history)
+                    messages.append({"role": "user", "content": question})
+                    response = openai_client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=messages,
+                        max_tokens=500,
+                        temperature=0.7
+                    )
+                    ai_text = response.choices[0].message.content
+                    sources = [{"type": "doc", "filename": matched_display}]
+
+            if not ai_text:
+                # --- Ask the RAG pipeline for the most relevant chunks and its confidence ---
+                chunks, top_score = get_relevant_context(group_id, question)
+
+                if top_score >= 0.0:
+                    # --- Case 1: RAG path ---
+                    # Top chunks scored well — answer directly from them
+                    print(f"[RAG] Case 1 triggered — answering from document chunks")
+                    context_parts = [
+                        f"[{chunk['filename']}]\n{chunk['text']}"
+                        for chunk in chunks
+                    ]
+                    context_str = "\n\n".join(context_parts)
+
+                    system_message = (
+                        "Answer the question using ONLY the context passages provided below. "
+                        "Each passage is labelled with its source file in square brackets. "
+                        "Cite the source inline as [filename.pdf] when you use information from it. "
+                        "Do not use general knowledge. Do not make up information.\n\n"
+                        "Context:\n\n" + context_str
                     )
 
                     messages = [{"role": "system", "content": system_message}]
@@ -552,52 +547,33 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                     )
                     ai_text = response.choices[0].message.content
 
-                    if REFUSAL_PHRASE not in ai_text:
-                        # GPT-4o found the answer in the full document
-                        sources = [{"type": "doc", "filename": fallback_filename}]
-                    else:
-                        # GPT-4o struck out — clear ai_text so we fall into Case 3
-                        ai_text = ""
-                        sources = []
+                    sources = [
+                        {"type": "doc", "filename": c["filename"], "chunk_index": c["chunk_index"]}
+                        for c in chunks
+                    ]
 
-                if not ai_text:
-                    # --- Case 3: Tavily web search ---
-                    # Pipeline calls Tavily explicitly — results passed as plain
-                    # text context, not as a tool to GPT-4o
-                    print(f"[RAG] Case 3 triggered — Tavily web search fallback")
-                    tavily_api_key = os.getenv("TAVILY_API_KEY")
-                    web_results = []
+                else:
+                    # --- Case 2: Full document fallback ---
+                    # Chunks scored too low — rerank the best document's chunks
+                    # against the query and pass the top hits instead of the full PDF
+                    fallback_filename = get_top_document(chunks) if chunks else None
+                    print(f"[RAG] Case 2 triggered — full document fallback: {fallback_filename}")
+                    fallback_text = ""
 
-                    if tavily_api_key:
-                        try:
-                            tavily_client_obj = TavilyClient(api_key=tavily_api_key)
-                            tavily_response = tavily_client_obj.search(
-                                query=question, max_results=5
-                            )
-                            web_results = tavily_response.get("results", [])
-                        except Exception:
-                            web_results = []
+                    if fallback_filename:
+                        fallback_chunks = get_top_chunks_for_document(
+                            group_id, question, fallback_filename
+                        )
+                        if fallback_chunks:
+                            fallback_text = "\n\n---\n\n".join(fallback_chunks)
 
-                    if not web_results:
-                        print(f"[RAG] All cases failed — returning final refusal")
-                        ai_text = "I don't have enough information to answer that question."
-                        sources = []
-                    else:
-                        context_parts = []
-                        for result in web_results:
-                            title = result.get("title", "")
-                            content = result.get("content", "")
-                            url = result.get("url", "")
-                            context_parts.append(f"Title: {title}\n{content}\nSource: {url}")
-                        context_str = "\n\n---\n\n".join(context_parts)
-
+                    if fallback_text.strip():
                         system_message = (
-                            "The uploaded documents do not contain the answer to this question. "
-                            "Answer using the web search results provided below. "
-                            "Clearly state in your response that this information comes from "
-                            "a web search, not the uploaded documents. "
-                            "Include the source URLs in your response.\n\n"
-                            "Web search results:\n\n" + context_str
+                            f"Answer the question using ONLY the document passages provided below. "
+                            f"Cite the source inline as [{fallback_filename}] when you use information from it. "
+                            f"If the answer is genuinely not in the passages, reply with exactly: "
+                            f"\"{REFUSAL_PHRASE}\"\n\n"
+                            f"Passages from {fallback_filename}:\n\n{fallback_text}"
                         )
 
                         messages = [{"role": "system", "content": system_message}]
@@ -612,11 +588,71 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                         )
                         ai_text = response.choices[0].message.content
 
-                        sources = [
-                            {"type": "web", "url": r.get("url", "")}
-                            for r in web_results
-                            if r.get("url")
-                        ]
+                        if REFUSAL_PHRASE not in ai_text:
+                            # GPT-4o found the answer in the full document
+                            sources = [{"type": "doc", "filename": fallback_filename}]
+                        else:
+                            # GPT-4o struck out — clear ai_text so we fall into Case 3
+                            ai_text = ""
+                            sources = []
+
+                    if not ai_text:
+                        # --- Case 3: Tavily web search ---
+                        # Pipeline calls Tavily explicitly — results passed as plain
+                        # text context, not as a tool to GPT-4o
+                        print(f"[RAG] Case 3 triggered — Tavily web search fallback")
+                        tavily_api_key = os.getenv("TAVILY_API_KEY")
+                        web_results = []
+
+                        if tavily_api_key:
+                            try:
+                                tavily_client_obj = TavilyClient(api_key=tavily_api_key)
+                                tavily_response = tavily_client_obj.search(
+                                    query=question, max_results=5
+                                )
+                                web_results = tavily_response.get("results", [])
+                            except Exception:
+                                web_results = []
+
+                        if not web_results:
+                            print(f"[RAG] All cases failed — returning final refusal")
+                            ai_text = "I don't have enough information to answer that question."
+                            sources = []
+                        else:
+                            context_parts = []
+                            for result in web_results:
+                                title = result.get("title", "")
+                                content = result.get("content", "")
+                                url = result.get("url", "")
+                                context_parts.append(f"Title: {title}\n{content}\nSource: {url}")
+                            context_str = "\n\n---\n\n".join(context_parts)
+
+                            system_message = (
+                                "The uploaded documents do not contain the answer to this question. "
+                                "Answer using the web search results provided below. "
+                                "Clearly state in your response that this information comes from "
+                                "a web search, not the uploaded documents. "
+                                "Include the source URLs in your response.\n\n"
+                                "Web search results:\n\n" + context_str
+                            )
+
+                            messages = [{"role": "system", "content": system_message}]
+                            messages.extend(conversation_history)
+                            messages.append({"role": "user", "content": question})
+
+                            response = openai_client.chat.completions.create(
+                                model="gpt-4o",
+                                messages=messages,
+                                max_tokens=500,
+                                temperature=0.7
+                            )
+                            ai_text = response.choices[0].message.content
+
+                            sources = [
+                                {"type": "web", "url": r.get("url", "")}
+                                for r in web_results
+                                if r.get("url")
+                            ]
 
             if username:
                 ai_text = f"@{username}: {ai_text}"
@@ -1457,7 +1493,7 @@ async def upload_document(
             if pdf_text.strip():
                 # Use safe_filename (timestamped) so two uploads of "report.pdf" don't
                 # clobber each other's ChromaDB embeddings.
-                index_document(group_id, safe_filename, pdf_text)
+                index_document(group_id, safe_filename, pdf_text, original_filename=file.filename)
         except Exception as e:
             # Don't block the upload if indexing fails — just log it
             logging.warning("Failed to index %s for RAG: %s", file.filename, str(e))
@@ -1466,7 +1502,7 @@ async def upload_document(
             reader = DocxDocument(file_path)
             doc_text = "\n".join(p.text for p in reader.paragraphs if p.text.strip())
             if doc_text.strip():
-                index_document(group_id, safe_filename, doc_text)
+                index_document(group_id, safe_filename, doc_text, original_filename=file.filename)
         except Exception as e:
             logging.warning("Failed to index %s for RAG: %s", file.filename, str(e))
     # .doc files land here — stored on disk, skipped for indexing since python-docx can't parse the old binary format
