@@ -7,6 +7,12 @@ components for the final submission.
 
 ## Phase 1 — User Enrolment
 
+**Admin role and user management** — ✓ Complete
+- Admin role added with full user management (create, edit, deactivate users)
+- Admin dashboard with user list, role management, and group allocation UI
+- Bulk user creation endpoint for Excel import (frontend to be added)
+- Microsoft authentication — pending Azure AD access
+
 **Microsoft authentication**
 - NTU users (students, supervisors, coordinators) log in via Microsoft authentication
 - User accounts are created by fetching from an Excel file

@@ -266,6 +266,21 @@ async def startup_event():
             conn.commit()
         except Exception:
             pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email TEXT UNIQUE"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN full_name TEXT"))
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"))
+            conn.commit()
+        except Exception:
+            pass
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS deadlines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -366,6 +381,35 @@ class DeadlineRequest(BaseModel):
 class CoursePeriodRequest(BaseModel):
     start_date: date
     end_date: date
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    email: str | None = None
+    full_name: str | None = None
+    role: str
+
+
+class UpdateUserRequest(BaseModel):
+    email: str | None = None
+    full_name: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
+
+
+class BulkUserEntry(BaseModel):
+    username: str
+    password: str
+    role: str
+    email: str | None = None
+    full_name: str | None = None
+    group_id: int | None = None
+
+
+class AddGroupMemberRequest(BaseModel):
+    user_id: int
+    role_in_group: str = "member"
 
 
 def compute_next_deadline(deadline_row) -> datetime:
@@ -982,7 +1026,10 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     # Verify password
     if not verify_password(login_data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    
+
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is deactivated.")
+
     # Create access token with username in the payload
     access_token = create_access_token(data={"sub": user.username}, expires_minutes=60)
     
@@ -999,7 +1046,9 @@ def get_current_user_info(current_user: models.User = Depends(get_current_user))
     """
     return {
         "username": current_user.username,
-        "role": current_user.role
+        "role": current_user.role,
+        "email": current_user.email,
+        "full_name": current_user.full_name,
     }
 
 
@@ -1044,7 +1093,7 @@ def get_my_groups(
         match = re.search(r'\d+', group_name)
         return int(match.group()) if match else 999
     
-    if current_user.role == "coordinator":
+    if current_user.role in ("coordinator", "admin"):
         # Coordinator sees all groups
         all_groups = db.query(models.Group).all()
         # Sort by group number extracted from name
@@ -1074,9 +1123,9 @@ def check_group_access(group_id: str, current_user: models.User, db: Session) ->
     db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
     if not db_group:
         return False
-    
-    # Coordinator has access to all groups
-    if current_user.role == "coordinator":
+
+    # Coordinator and admin have access to all groups
+    if current_user.role in ("coordinator", "admin"):
         return True
     
     # Check if user is a member of this group
@@ -1099,10 +1148,10 @@ def check_summary_access(group_id: str, current_user: models.User, db: Session) 
     if not db_group:
         return False
     
-    # Coordinator has access to all groups
-    if current_user.role == "coordinator":
+    # Coordinator and admin have access to all groups
+    if current_user.role in ("coordinator", "admin"):
         return True
-    
+
     # All group members (supervisors and students) have access
     membership = db.query(models.GroupMember).filter(
         models.GroupMember.user_id == current_user.id,
@@ -1589,9 +1638,9 @@ def delete_document(
 
     # Students can only delete their own uploads; supervisors and coordinators can delete any.
     is_uploader = document.uploaded_by_user_id == current_user.id
-    is_privileged = current_user.role in ("supervisor", "coordinator")
+    is_privileged = current_user.role in ("supervisor", "coordinator", "admin")
     if not (is_uploader or is_privileged):
-        raise HTTPException(status_code=403, detail="Only the uploader or a supervisor/coordinator can delete this document")
+        raise HTTPException(status_code=403, detail="Only the uploader, a supervisor, coordinator, or admin can delete this document")
 
     # Delete the file from file system
     file_path = Path(document.stored_path).resolve()
@@ -2108,7 +2157,7 @@ def set_deadline(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.role != "coordinator":
+    if current_user.role not in ("coordinator", "admin"):
         raise HTTPException(status_code=403, detail="Only coordinators can set the deadline")
 
     if body.frequency not in ("once", "weekly", "biweekly"):
@@ -2155,7 +2204,7 @@ def set_course_period(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.role != "coordinator":
+    if current_user.role not in ("coordinator", "admin"):
         raise HTTPException(status_code=403, detail="Only coordinators can set the course period")
 
     if body.end_date <= body.start_date:
@@ -2955,3 +3004,237 @@ def supervisor_group_analysis(
         "student_summary_text": latest_student.summary_text if latest_student else None,
         "ai_summary_copy_text": latest_student.ai_summary_copy if latest_student else None,
     }
+
+
+VALID_ROLES = {"student", "supervisor", "coordinator", "admin"}
+
+
+def _user_dict(user: models.User) -> dict:
+    # shared shape returned by all admin user endpoints
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "is_active": user.is_active,
+        "created_at": user.created_at.isoformat() + "Z",
+    }
+
+
+@app.get("/admin/users")
+def admin_list_users(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    users = db.query(models.User).order_by(models.User.created_at.asc()).all()
+    return [_user_dict(u) for u in users]
+
+
+@app.post("/admin/users", status_code=201)
+def admin_create_user(
+    body: CreateUserRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    if body.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {sorted(VALID_ROLES)}")
+    if db.query(models.User).filter(models.User.username == body.username).first():
+        raise HTTPException(status_code=400, detail="Username already taken.")
+    if body.email and db.query(models.User).filter(models.User.email == body.email).first():
+        raise HTTPException(status_code=400, detail="Email already taken.")
+    user = models.User(
+        username=body.username,
+        password_hash=hash_password(body.password),
+        role=body.role,
+        email=body.email,
+        full_name=body.full_name,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return _user_dict(user)
+
+
+@app.put("/admin/users/{user_id}")
+def admin_update_user(
+    user_id: int,
+    body: UpdateUserRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if body.role is not None:
+        if body.role not in VALID_ROLES:
+            raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {sorted(VALID_ROLES)}")
+        user.role = body.role
+    if body.email is not None:
+        existing = db.query(models.User).filter(
+            models.User.email == body.email,
+            models.User.id != user_id,
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already taken.")
+        user.email = body.email
+    if body.full_name is not None:
+        user.full_name = body.full_name
+    if body.is_active is not None:
+        user.is_active = body.is_active
+    db.commit()
+    db.refresh(user)
+    return _user_dict(user)
+
+
+@app.delete("/admin/users/{user_id}")
+def admin_deactivate_user(
+    user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account.")
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    user.is_active = False
+    db.commit()
+    return {"message": "User deactivated."}
+
+
+@app.post("/admin/users/bulk", status_code=201)
+def admin_bulk_create_users(
+    body: list[BulkUserEntry],
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    created = []
+    skipped = []
+    for entry in body:
+        if db.query(models.User).filter(models.User.username == entry.username).first():
+            skipped.append(entry.username)
+            continue
+        if entry.role not in VALID_ROLES:
+            skipped.append(entry.username)
+            continue
+        user = models.User(
+            username=entry.username,
+            password_hash=hash_password(entry.password),
+            role=entry.role,
+            email=entry.email,
+            full_name=entry.full_name,
+        )
+        db.add(user)
+        db.flush()  # get user.id before creating the membership below
+        if entry.group_id is not None:
+            group = db.query(models.Group).filter(models.Group.id == entry.group_id).first()
+            if group:
+                db.add(models.GroupMember(user_id=user.id, group_id=entry.group_id))
+        created.append(entry.username)
+    db.commit()
+    return {"created": created, "skipped": skipped}
+
+
+@app.post("/admin/groups/{group_id}/members", status_code=201)
+def admin_add_group_member(
+    group_id: int,
+    body: AddGroupMemberRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    group = db.query(models.Group).filter(models.Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found.")
+    user = db.query(models.User).filter(models.User.id == body.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    already = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == body.user_id,
+        models.GroupMember.group_id == group_id,
+    ).first()
+    if already:
+        return {"message": "User already in group."}
+    db.add(models.GroupMember(
+        user_id=body.user_id,
+        group_id=group_id,
+        role_in_group=body.role_in_group,
+    ))
+    db.commit()
+    return {"message": "User added to group."}
+
+
+@app.delete("/admin/groups/{group_id}/members/{user_id}")
+def admin_remove_group_member(
+    group_id: int,
+    user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    membership = db.query(models.GroupMember).filter(
+        models.GroupMember.user_id == user_id,
+        models.GroupMember.group_id == group_id,
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=404, detail="Membership not found.")
+    db.delete(membership)
+    db.commit()
+    return {"message": "User removed from group."}
+
+
+@app.get("/admin/groups")
+def admin_list_groups(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    all_groups = db.query(models.Group).all()
+    # same numeric sort used by /my-groups for coordinators
+    def extract_group_number(group_name):
+        match = re.search(r"\d+", group_name)
+        return int(match.group()) if match else 999
+    sorted_groups = sorted(all_groups, key=lambda g: extract_group_number(g.name))
+    return [{"id": g.id, "name": g.name, "string_id": g.string_id} for g in sorted_groups]
+
+
+@app.get("/admin/groups/{group_id}/members")
+def admin_list_group_members(
+    group_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    group = db.query(models.Group).filter(models.Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found.")
+    members = (
+        db.query(models.User)
+        .join(models.GroupMember, models.GroupMember.user_id == models.User.id)
+        .filter(models.GroupMember.group_id == group_id)
+        .all()
+    )
+    return [
+        {
+            "id": m.id,
+            "username": m.username,
+            "full_name": m.full_name,
+            "role": m.role,
+        }
+        for m in members
+    ]
