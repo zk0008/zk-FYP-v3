@@ -8,11 +8,15 @@ import {
   Switch,
   ActivityIndicator,
   Modal,
+  Alert,
   StyleSheet,
 } from "react-native";
 import { useRouter, Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import { useAuth } from "../hooks/useAuth";
+import * as XLSX from "xlsx";
+import * as FileSystem from "expo-file-system/legacy";
+import * as DocumentPicker from "expo-document-picker";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 
@@ -89,6 +93,14 @@ export default function Admin() {
   const [showUserPicker, setShowUserPicker] = useState<Record<number, boolean>>({});
   const [addMemberSaving, setAddMemberSaving] = useState<Record<number, boolean>>({});
   const [removeSaving, setRemoveSaving] = useState<Record<string, boolean>>({});
+
+  const [showImport, setShowImport] = useState(false);
+  const [importFile, setImportFile] = useState<{ name: string; uri: string } | null>(null);
+  const [importPreview, setImportPreview] = useState<{ matric_number: string; full_name: string; group_name: string }[]>([]);
+  const [importParsed, setImportParsed] = useState<{ username: string; matric_number: string; full_name: string; email: string; group_name: string; supervisor_email?: string }[]>([]);
+  const [importStatus, setImportStatus] = useState<"idle" | "parsing" | "importing" | "done" | "error">("idle");
+  const [importError, setImportError] = useState("");
+  const [importResult, setImportResult] = useState<{ created: string[]; skipped: string[]; errors: string[] } | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -227,6 +239,38 @@ export default function Admin() {
     }
   }
 
+  function handleHardDeleteUser() {
+    if (!editUser) return;
+    Alert.alert(
+      "Delete Permanently",
+      "Are you sure? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const res = await fetch(`${API_BASE}/admin/users/${editUser.id}/permanent`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+                throw new Error(err.detail ?? "Unknown error");
+              }
+              setShowEditUser(false);
+              loadUsers();
+            } catch (e: unknown) {
+              setEditStatus("error");
+              setEditError(e instanceof Error ? e.message : "Unknown error");
+            }
+          },
+        },
+      ]
+    );
+  }
+
   function toggleGroup(groupId: number) {
     if (expandedGroupId === groupId) {
       setExpandedGroupId(null);
@@ -297,6 +341,94 @@ export default function Admin() {
         () => setGroupFeedback((prev) => ({ ...prev, [groupId]: { msg: "", ok: true } })),
         3000
       );
+    }
+  }
+
+  function openImport() {
+    setShowImport(true);
+    setImportFile(null);
+    setImportPreview([]);
+    setImportParsed([]);
+    setImportStatus("idle");
+    setImportError("");
+    setImportResult(null);
+  }
+
+  async function handleSelectFile() {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream", "*/*"],
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setImportFile({ name: asset.name, uri: asset.uri });
+    setImportStatus("parsing");
+    setImportError("");
+    setImportResult(null);
+    setImportPreview([]);
+    setImportParsed([]);
+    try {
+      const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: "base64",
+      });
+      const wb = XLSX.read(base64, { type: "base64" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as Record<string, unknown>[];
+      const parsed = rows
+        .map((row) => {
+          const norm: Record<string, string> = {};
+          for (const key of Object.keys(row)) {
+            norm[key.toLowerCase().trim()] = String(row[key] ?? "").trim();
+          }
+          return {
+            username: norm["username"] ?? "",
+            matric_number: norm["matric_number"] ?? "",
+            full_name: norm["full_name"] ?? "",
+            email: norm["email"] ?? "",
+            group_name: norm["group_name"] ?? "",
+            supervisor_email: norm["supervisor_email"] || undefined,
+          };
+        })
+        .filter((r) => r.username && r.matric_number && r.email && r.group_name);
+      setImportParsed(parsed);
+      setImportPreview(
+        parsed.slice(0, 5).map((r) => ({
+          matric_number: r.matric_number,
+          full_name: r.full_name,
+          group_name: r.group_name,
+        }))
+      );
+      setImportStatus("idle");
+    } catch {
+      setImportStatus("error");
+      setImportError("Failed to parse file. Make sure it is a valid .xlsx file.");
+    }
+  }
+
+  async function handleImport() {
+    if (!importParsed.length) return;
+    setImportStatus("importing");
+    try {
+      const res = await fetch(`${API_BASE}/admin/students/import`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(importParsed),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(err.detail ?? "Unknown error");
+      }
+      const data = await res.json();
+      setImportResult(data);
+      setImportStatus("done");
+      loadUsers();
+      loadGroups();
+    } catch (e: unknown) {
+      setImportStatus("error");
+      setImportError(e instanceof Error ? e.message : "Unknown error");
     }
   }
 
@@ -520,6 +652,99 @@ export default function Admin() {
                 )}
               </TouchableOpacity>
             </View>
+
+            <TouchableOpacity
+              style={styles.deleteBtn}
+              onPress={handleHardDeleteUser}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.deleteBtnText}>Delete Permanently</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Import Students Modal ──────────────────────────────── */}
+      <Modal
+        visible={showImport}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowImport(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Import Students</Text>
+            <Text style={styles.importInstructions}>
+              Select an Excel file (.xlsx) with columns: matric_number, full_name, email, group_name, supervisor_email (optional).
+              Password will be set to the last 4 characters of the matric number.
+            </Text>
+
+            <TouchableOpacity
+              style={[styles.outlineBtn, { marginTop: 12 }]}
+              onPress={handleSelectFile}
+              activeOpacity={0.8}
+              disabled={importStatus === "importing"}
+            >
+              <Text style={styles.outlineBtnText} numberOfLines={1}>
+                {importFile ? importFile.name : "Select File"}
+              </Text>
+            </TouchableOpacity>
+
+            {importPreview.length > 0 && (
+              <View style={styles.previewCard}>
+                <Text style={styles.previewLabel}>
+                  Preview · {importParsed.length} row{importParsed.length !== 1 ? "s" : ""} total
+                </Text>
+                {importPreview.map((row, i) => (
+                  <View key={i} style={styles.previewRow}>
+                    <Text style={styles.previewMatric}>{row.matric_number}</Text>
+                    <Text style={styles.previewName} numberOfLines={1}>{row.full_name}</Text>
+                    <Text style={styles.previewGroup} numberOfLines={1}>{row.group_name}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {importStatus === "error" && (
+              <Text style={styles.errorText}>{importError}</Text>
+            )}
+
+            {importStatus === "done" && importResult && (
+              <View style={{ marginTop: 10 }}>
+                <Text style={styles.successText}>
+                  {importResult.created.length} created, {importResult.skipped.length} skipped.
+                </Text>
+                {importResult.errors.map((e, i) => (
+                  <Text key={i} style={styles.errorText}>{e}</Text>
+                ))}
+              </View>
+            )}
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.outlineBtn}
+                onPress={() => setShowImport(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.outlineBtnText}>Close</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.primaryBtn,
+                  { flex: 1 },
+                  (!importParsed.length || importStatus === "importing") && styles.btnDisabled,
+                ]}
+                onPress={handleImport}
+                activeOpacity={0.8}
+                disabled={!importParsed.length || importStatus === "importing"}
+              >
+                {importStatus === "importing" ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={styles.primaryBtnText}>Import</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -528,6 +753,14 @@ export default function Admin() {
 
         {/* ── Section A: Users ──────────────────────────────────── */}
         <Text style={styles.sectionLabel}>Users</Text>
+
+        <TouchableOpacity
+          style={[styles.outlineBtn, { marginBottom: 8 }]}
+          onPress={openImport}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.outlineBtnText}>Import Students (.xlsx)</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.primaryBtn, { marginBottom: 10 }]}
@@ -869,6 +1102,21 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
   // modals
+  deleteBtn: {
+    borderWidth: 1,
+    borderColor: "#d32f2f",
+    borderRadius: 10,
+    paddingVertical: 11,
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 10,
+  },
+  deleteBtnText: {
+    color: "#d32f2f",
+    fontWeight: "600",
+    fontSize: 14,
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -1026,5 +1274,48 @@ const styles = StyleSheet.create({
     color: "#1a1a1a",
     flex: 1,
     marginRight: 8,
+  },
+  // import modal
+  importInstructions: {
+    fontSize: 13,
+    color: "#757575",
+    lineHeight: 18,
+    marginBottom: 4,
+  },
+  previewCard: {
+    backgroundColor: "#f0f4f8",
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 12,
+  },
+  previewLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#9e9e9e",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  previewRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingVertical: 3,
+  },
+  previewMatric: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#1a1a1a",
+    width: 90,
+  },
+  previewName: {
+    fontSize: 12,
+    color: "#1a1a1a",
+    flex: 1,
+  },
+  previewGroup: {
+    fontSize: 12,
+    color: "#757575",
+    width: 80,
+    textAlign: "right",
   },
 });

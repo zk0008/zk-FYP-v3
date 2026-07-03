@@ -56,7 +56,7 @@ type Message = {
   image_url?: string;
 };
 
-type Member = { username: string };
+type Member = { username: string; full_name?: string };
 
 export default function Chats() {
   // useGlobalSearchParams needed here — groupId is a parent-route segment ([groupId]/_layout),
@@ -431,7 +431,7 @@ export default function Chats() {
                     m.username === "ai" && styles.mentionItemAi,
                   ]}
                 >
-                  @{m.username}
+                  {m.full_name ?? `@${m.username}`}
                 </Text>
               </TouchableOpacity>
             ))}

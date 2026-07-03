@@ -10,8 +10,21 @@ components for the final submission.
 **Admin role and user management** — ✓ Complete
 - Admin role added with full user management (create, edit, deactivate users)
 - Admin dashboard with user list, role management, and group allocation UI
-- Bulk user creation endpoint for Excel import (frontend to be added)
-- Microsoft authentication — pending Azure AD access
+
+**Excel import for student account creation** — ✓ Complete
+- Admin uploads an .xlsx file with columns: username, matric_number, full_name, email, group_name, supervisor_email (optional)
+- Students are created with temporary password (last 4 characters of matric number)
+- Automatically assigned to groups and supervisors based on the file
+- Duplicate usernames are skipped; inactive accounts are reactivated on re-import
+
+**Change password** — ✓ Complete
+- All users can change their password from the group list screen
+- Requires current password verification and minimum 8 character new password
+
+**Hard delete user** — ✓ Complete
+- Admin can permanently delete a user from the Edit User modal
+- Requires confirmation before deletion
+- Cannot delete own account
 
 **Microsoft authentication**
 - NTU users (students, supervisors, coordinators) log in via Microsoft authentication

@@ -412,6 +412,20 @@ class AddGroupMemberRequest(BaseModel):
     role_in_group: str = "member"
 
 
+class ExcelStudentEntry(BaseModel):
+    username: str
+    matric_number: str
+    full_name: str
+    email: str
+    group_name: str
+    supervisor_email: str | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 def compute_next_deadline(deadline_row) -> datetime:
     # fall back to deadline_dt for rows created before start_dt existed
     anchor = deadline_row.start_dt or deadline_row.deadline_dt
@@ -1052,6 +1066,21 @@ def get_current_user_info(current_user: models.User = Depends(get_current_user))
     }
 
 
+@app.post("/auth/change-password")
+def change_password(
+    body: ChangePasswordRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(status_code=403, detail="Current password is incorrect.")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+    current_user.password_hash = hash_password(body.new_password)
+    db.commit()
+    return {"message": "Password updated."}
+
+
 class PushTokenRequest(BaseModel):
     token: str
 
@@ -1182,7 +1211,7 @@ def list_group_members(
         models.User.id != current_user.id
     ).all()
 
-    result = [{"username": m.username} for m in members]
+    result = [{"username": m.username, "full_name": m.full_name} for m in members]
     # "ai" is a special mention target that triggers the RAG pipeline
     result.append({"username": "ai"})
 
@@ -3111,6 +3140,24 @@ def admin_deactivate_user(
     return {"message": "User deactivated."}
 
 
+@app.delete("/admin/users/{user_id}/permanent")
+def admin_hard_delete_user(
+    user_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account.")
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    db.delete(user)
+    db.commit()
+    return {"message": "User permanently deleted."}
+
+
 @app.post("/admin/users/bulk", status_code=201)
 def admin_bulk_create_users(
     body: list[BulkUserEntry],
@@ -3238,3 +3285,76 @@ def admin_list_group_members(
         }
         for m in members
     ]
+
+
+@app.post("/admin/students/import", status_code=201)
+def admin_import_students(
+    body: list[ExcelStudentEntry],
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    created = []
+    skipped = []
+    errors = []
+    for entry in body:
+        username = entry.username
+        existing = db.query(models.User).filter(models.User.username == username).first()
+        if existing:
+            if existing.is_active:
+                skipped.append(username)
+                continue
+            # reactivate an inactive account and refresh their details
+            existing.is_active = True
+            existing.full_name = entry.full_name
+            existing.email = entry.email
+            user = existing
+        else:
+            # Skip if email is already taken by a different active account
+            if db.query(models.User).filter(models.User.email == entry.email).first():
+                skipped.append(username)
+                continue
+            # last 4 chars of the matric number as the temporary password
+            temp_password = entry.matric_number[-4:]
+            user = models.User(
+                username=username,
+                password_hash=hash_password(temp_password),
+                role="student",
+                email=entry.email,
+                full_name=entry.full_name,
+            )
+            db.add(user)
+            db.flush()
+        # case-insensitive group lookup — create the group if it doesn't exist yet
+        group = db.query(models.Group).filter(
+            models.Group.name.ilike(entry.group_name)
+        ).first()
+        if not group:
+            string_id = entry.group_name.lower().replace(" ", "-")
+            group = models.Group(name=entry.group_name, string_id=string_id)
+            db.add(group)
+            db.flush()
+        # link student to group
+        already = db.query(models.GroupMember).filter(
+            models.GroupMember.user_id == user.id,
+            models.GroupMember.group_id == group.id,
+        ).first()
+        if not already:
+            db.add(models.GroupMember(user_id=user.id, group_id=group.id))
+        # if a supervisor email was provided, add them to the group too
+        if entry.supervisor_email:
+            supervisor = db.query(models.User).filter(
+                models.User.email == entry.supervisor_email,
+                models.User.role == "supervisor",
+            ).first()
+            if supervisor:
+                sup_already = db.query(models.GroupMember).filter(
+                    models.GroupMember.user_id == supervisor.id,
+                    models.GroupMember.group_id == group.id,
+                ).first()
+                if not sup_already:
+                    db.add(models.GroupMember(user_id=supervisor.id, group_id=group.id))
+        created.append(username)
+    db.commit()
+    return {"created": created, "skipped": skipped, "errors": errors}

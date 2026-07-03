@@ -4,14 +4,19 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
   StyleSheet,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../hooks/useAuth";
 import { useGroups, type Group } from "../hooks/useGroups";
 
+const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 const WS_BASE = process.env.EXPO_PUBLIC_WS_URL ?? "ws://127.0.0.1:8001";
 
 // Defined outside so the function reference is stable across renders
@@ -24,6 +29,12 @@ export default function Groups() {
   const router = useRouter();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [showSettings, setShowSettings] = useState(false);
+  const [currentPwd, setCurrentPwd] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [settingsStatus, setSettingsStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [settingsError, setSettingsError] = useState("");
 
   // Refresh immediately on focus, poll every 15s, and open a home WebSocket so
   // cross-group nudges from send_to_user land here and trigger an immediate refresh
@@ -61,6 +72,42 @@ export default function Groups() {
     }
   }, [isAuthenticated, isAuthLoading]);
 
+  function openChangePassword() {
+    setCurrentPwd("");
+    setNewPwd("");
+    setSettingsStatus("idle");
+    setSettingsError("");
+    setShowSettings(true);
+  }
+
+  async function handleChangePassword() {
+    if (!currentPwd || !newPwd) return;
+    setSettingsStatus("saving");
+    setSettingsError("");
+    try {
+      const res = await fetch(`${API_BASE}/auth/change-password`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ current_password: currentPwd, new_password: newPwd }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(err.detail ?? "Unknown error");
+      }
+      setSettingsStatus("success");
+      setTimeout(() => {
+        setShowSettings(false);
+        setSettingsStatus("idle");
+      }, 1500);
+    } catch (e: unknown) {
+      setSettingsStatus("error");
+      setSettingsError(e instanceof Error ? e.message : "Unknown error");
+    }
+  }
+
   const handleLogout = async () => {
     await logout();
     router.replace("/login");
@@ -97,12 +144,95 @@ export default function Groups() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* ── Change Password Modal ────────────────────────────── */}
+      <Modal
+        visible={showSettings}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSettings(false)}
+      >
+        <TouchableOpacity
+          style={styles.settingsOverlay}
+          activeOpacity={1}
+          onPress={() => setShowSettings(false)}
+        >
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.settingsContent}>
+                <Text style={styles.settingsTitle}>Change Password</Text>
+
+                <Text style={styles.settingsLabel}>Current Password</Text>
+                <TextInput
+                  style={styles.settingsInput}
+                  value={currentPwd}
+                  onChangeText={setCurrentPwd}
+                  placeholder="current password"
+                  placeholderTextColor="#9e9e9e"
+                  secureTextEntry
+                />
+
+                <Text style={styles.settingsLabel}>New Password</Text>
+                <TextInput
+                  style={styles.settingsInput}
+                  value={newPwd}
+                  onChangeText={setNewPwd}
+                  placeholder="at least 8 characters"
+                  placeholderTextColor="#9e9e9e"
+                  secureTextEntry
+                />
+
+                {settingsStatus === "error" && (
+                  <Text style={styles.settingsError}>{settingsError}</Text>
+                )}
+                {settingsStatus === "success" && (
+                  <Text style={styles.settingsSuccess}>✓ Password updated.</Text>
+                )}
+
+                <View style={styles.settingsActions}>
+                  <TouchableOpacity
+                    style={styles.settingsCancelBtn}
+                    onPress={() => setShowSettings(false)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.settingsCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.settingsSaveBtn,
+                      settingsStatus === "saving" && styles.settingsBtnDisabled,
+                    ]}
+                    onPress={handleChangePassword}
+                    activeOpacity={0.8}
+                    disabled={settingsStatus === "saving"}
+                  >
+                    {settingsStatus === "saving" ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={styles.settingsSaveText}>Save</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
+      </Modal>
+
       <View style={styles.header}>
-        <View>
+        <View style={{ flex: 1, marginRight: 8 }}>
           <Text style={styles.headerTitle}>MS3015 Chat</Text>
-          <Text style={styles.headerSub}>
-            {user?.username ?? ""} · {user?.role ?? ""}
-          </Text>
+          <View style={styles.headerSubRow}>
+            <Text style={styles.headerSub}>
+              {user?.username ?? ""} · {user?.role ?? ""}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={openChangePassword}
+            style={styles.settingsBtn}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.settingsBtnText}>Change Password</Text>
+          </TouchableOpacity>
         </View>
         <View style={styles.headerActions}>
           {user?.role === "coordinator" && (
@@ -324,5 +454,104 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontWeight: "600",
     fontSize: 14,
+  },
+  headerSubRow: {
+    marginTop: 2,
+  },
+  settingsBtn: {
+    marginTop: 2,
+  },
+  settingsBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#1976d2",
+  },
+  // change password modal
+  settingsOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  settingsContent: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  settingsTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    marginBottom: 16,
+  },
+  settingsLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#757575",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 6,
+    marginTop: 12,
+  },
+  settingsInput: {
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: "#1a1a1a",
+    backgroundColor: "#f5f5f5",
+    minHeight: 44,
+  },
+  settingsError: {
+    color: "#d32f2f",
+    fontSize: 13,
+    marginTop: 8,
+  },
+  settingsSuccess: {
+    color: "#22c55e",
+    fontSize: 13,
+    fontWeight: "500",
+    marginTop: 8,
+  },
+  settingsActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 20,
+  },
+  settingsCancelBtn: {
+    borderWidth: 1,
+    borderColor: "#1976d2",
+    borderRadius: 10,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+  },
+  settingsCancelText: {
+    color: "#1976d2",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  settingsSaveBtn: {
+    flex: 1,
+    backgroundColor: "#1976d2",
+    borderRadius: 10,
+    paddingVertical: 11,
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  settingsSaveText: {
+    color: "#ffffff",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  settingsBtnDisabled: {
+    opacity: 0.6,
   },
 });
