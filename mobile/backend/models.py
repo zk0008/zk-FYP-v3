@@ -175,3 +175,14 @@ class Notification(Base):
     sender = relationship("User", foreign_keys=[sender_id])
     message = relationship("Message")
 
+
+class Broadcast(Base):
+    __tablename__ = "broadcasts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    content = Column(Text, nullable=False)
+    sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    sent_by = relationship("User")
+

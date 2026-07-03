@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -36,6 +37,14 @@ export default function Groups() {
   const [settingsStatus, setSettingsStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
   const [settingsError, setSettingsError] = useState("");
 
+  const [broadcasts, setBroadcasts] = useState<{ id: number; content: string; sent_by: string | null; created_at: string }[]>([]);
+  const [showBroadcasts, setShowBroadcasts] = useState(false);
+  const [lastSeenBroadcastId, setLastSeenBroadcastId] = useState(0);
+  const [broadcastInput, setBroadcastInput] = useState("");
+  const [broadcastSending, setBroadcastSending] = useState(false);
+  const [broadcastError, setBroadcastError] = useState("");
+  const [hasNewBroadcast, setHasNewBroadcast] = useState(false);
+
   // Refresh immediately on focus, poll every 15s, and open a home WebSocket so
   // cross-group nudges from send_to_user land here and trigger an immediate refresh
   useFocusEffect(useCallback(() => {
@@ -46,8 +55,23 @@ export default function Groups() {
       if (!token) return;
       const ws = new WebSocket(`${WS_BASE}/ws/home?token=${token}`);
       wsRef.current = ws;
-      // any incoming event (message nudge or notification) means badge counts changed
-      ws.onmessage = () => { refresh(); };
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "broadcast") {
+            // skip if we already have this id — happens when GET /broadcasts and WS replay overlap
+            setBroadcasts((prev) =>
+              prev.some((b) => b.id === data.id) ? prev : [data, ...prev]
+            );
+            if (data.id > lastSeenBroadcastId) setHasNewBroadcast(true);
+            return;
+          }
+        } catch {
+          // not JSON — fall through to the badge-count refresh below
+        }
+        // any other event (message nudge, notification) means badge counts changed
+        refresh();
+      };
       ws.onclose = (event) => {
         // 1000 = intentional close from cleanup — don't reconnect
         if (event.code !== 1000) {
@@ -106,6 +130,80 @@ export default function Groups() {
       setSettingsStatus("error");
       setSettingsError(e instanceof Error ? e.message : "Unknown error");
     }
+  }
+
+  async function openBroadcasts() {
+    setShowBroadcasts(true);
+    setBroadcastError("");
+    try {
+      const res = await fetch(`${API_BASE}/broadcasts`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBroadcasts(data);
+        if (data.length > 0) setLastSeenBroadcastId(data[0].id);
+      }
+    } catch {
+      // silently fail — list stays as-is
+    }
+    setHasNewBroadcast(false);
+  }
+
+  async function handleSendBroadcast() {
+    if (!broadcastInput.trim() || broadcastSending) return;
+    setBroadcastSending(true);
+    setBroadcastError("");
+    try {
+      const res = await fetch(`${API_BASE}/broadcast`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ content: broadcastInput.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(err.detail ?? "Unknown error");
+      }
+      setBroadcastInput("");
+      // the WS push from the server will add the new broadcast to the list
+    } catch (e: unknown) {
+      setBroadcastError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setBroadcastSending(false);
+    }
+  }
+
+  function handleDeleteBroadcast(id: number) {
+    Alert.alert("Delete this announcement?", "", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          const res = await fetch(`${API_BASE}/broadcasts/${id}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (res.ok) {
+            setBroadcasts((prev) => prev.filter((b) => b.id !== id));
+          }
+        },
+      },
+    ]);
+  }
+
+  function formatBroadcastDate(iso: string): string {
+    return new Intl.DateTimeFormat("en-SG", {
+      timeZone: "Asia/Singapore",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(new Date(iso));
   }
 
   const handleLogout = async () => {
@@ -218,6 +316,84 @@ export default function Groups() {
         </TouchableOpacity>
       </Modal>
 
+      {/* ── Announcements Modal ──────────────────────────────── */}
+      <Modal
+        visible={showBroadcasts}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowBroadcasts(false)}
+      >
+        <TouchableOpacity
+          style={styles.settingsOverlay}
+          activeOpacity={1}
+          onPress={() => setShowBroadcasts(false)}
+        >
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.settingsContent}>
+                <Text style={styles.settingsTitle}>Announcements</Text>
+
+                {(user?.role === "coordinator" || user?.role === "admin") && (
+                  <View style={styles.broadcastInputRow}>
+                    <TextInput
+                      style={styles.broadcastTextInput}
+                      value={broadcastInput}
+                      onChangeText={setBroadcastInput}
+                      placeholder="New announcement..."
+                      placeholderTextColor="#9e9e9e"
+                      multiline
+                      maxLength={1000}
+                    />
+                    <TouchableOpacity
+                      style={[styles.broadcastSendBtn, broadcastSending && styles.settingsBtnDisabled]}
+                      onPress={handleSendBroadcast}
+                      disabled={broadcastSending}
+                      activeOpacity={0.8}
+                    >
+                      {broadcastSending ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <Text style={styles.broadcastSendText}>Send</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {broadcastError !== "" && (
+                  <Text style={styles.settingsError}>{broadcastError}</Text>
+                )}
+
+                {broadcasts.length === 0 ? (
+                  <Text style={styles.broadcastEmpty}>No announcements yet.</Text>
+                ) : (
+                  <FlatList
+                    data={broadcasts}
+                    keyExtractor={(b) => String(b.id)}
+                    style={styles.broadcastList}
+                    renderItem={({ item }) => (
+                      <View style={styles.broadcastItem}>
+                        <Text style={styles.broadcastContent}>{item.content}</Text>
+                        <View style={styles.broadcastItemFooter}>
+                          <Text style={styles.broadcastMeta}>
+                            {item.sent_by ?? "System"} · {formatBroadcastDate(item.created_at)}
+                          </Text>
+                          {(user?.role === "coordinator" || user?.role === "admin") && (
+                            <TouchableOpacity onPress={() => handleDeleteBroadcast(item.id)} activeOpacity={0.7}>
+                              <Text style={styles.broadcastDeleteText}>Delete</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    )}
+                    ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: "#f0f0f0" }} />}
+                  />
+                )}
+              </View>
+            </TouchableOpacity>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
+      </Modal>
+
       <View style={styles.header}>
         <View style={{ flex: 1, marginRight: 8 }}>
           <Text style={styles.headerTitle}>MS3015 Chat</Text>
@@ -273,6 +449,27 @@ export default function Groups() {
       </View>
 
       <View style={styles.contentContainer}>
+        {(broadcasts.length > 0 || hasNewBroadcast) && (
+          <TouchableOpacity
+            style={styles.announcementBanner}
+            onPress={openBroadcasts}
+            activeOpacity={0.8}
+          >
+            <View style={styles.announcementContent}>
+              <Text style={styles.announcementText} numberOfLines={1} ellipsizeMode="tail">
+                {broadcasts[0]?.content ?? ""}
+              </Text>
+              <Text style={styles.announcementMeta}>
+                {broadcasts[0]?.sent_by ?? "System"} · {broadcasts[0] ? formatBroadcastDate(broadcasts[0].created_at) : ""}
+              </Text>
+            </View>
+            <View style={styles.announcementAction}>
+              <Text style={styles.announcementActionText}>View All</Text>
+              {hasNewBroadcast && <View style={styles.announcementDot} />}
+            </View>
+          </TouchableOpacity>
+        )}
+
         <Text style={styles.sectionLabel}>Your chatrooms</Text>
 
         {isLoading && (
@@ -553,5 +750,113 @@ const styles = StyleSheet.create({
   },
   settingsBtnDisabled: {
     opacity: 0.6,
+  },
+  // announcement banner
+  announcementBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#e8f0fd",
+    borderLeftWidth: 4,
+    borderLeftColor: "#1976d2",
+    borderRadius: 8,
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 12,
+  },
+  announcementContent: {
+    flex: 1,
+    marginRight: 8,
+  },
+  announcementText: {
+    fontSize: 14,
+    color: "#1a1a1a",
+    fontWeight: "600",
+  },
+  announcementMeta: {
+    fontSize: 12,
+    color: "#757575",
+    marginTop: 2,
+  },
+  announcementAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  announcementActionText: {
+    fontSize: 13,
+    color: "#1976d2",
+    fontWeight: "600",
+  },
+  announcementDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#d32f2f",
+  },
+  broadcastInputRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 12,
+  },
+  broadcastTextInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: "#1a1a1a",
+    backgroundColor: "#f5f5f5",
+    minHeight: 44,
+    maxHeight: 100,
+  },
+  broadcastSendBtn: {
+    backgroundColor: "#1976d2",
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  broadcastSendText: {
+    color: "#ffffff",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  broadcastEmpty: {
+    color: "#9e9e9e",
+    fontSize: 14,
+    textAlign: "center",
+    paddingVertical: 24,
+  },
+  broadcastList: {
+    maxHeight: 280,
+  },
+  broadcastItem: {
+    paddingVertical: 12,
+  },
+  broadcastContent: {
+    fontSize: 15,
+    color: "#1a1a1a",
+    lineHeight: 21,
+    marginBottom: 4,
+  },
+  broadcastItemFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  broadcastMeta: {
+    fontSize: 12,
+    color: "#9e9e9e",
+  },
+  broadcastDeleteText: {
+    fontSize: 12,
+    color: "#d32f2f",
+    fontWeight: "600",
   },
 });

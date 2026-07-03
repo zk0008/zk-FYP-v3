@@ -300,6 +300,15 @@ async def startup_event():
             )
         """))
         conn.commit()
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS broadcasts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                sent_by_user_id INTEGER REFERENCES users(id),
+                created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        conn.commit()
     # Copy any existing Group.student_summary text into the new student_summaries table
     migrate_student_summaries()
     # Ensure uploads directories exist
@@ -424,6 +433,10 @@ class ExcelStudentEntry(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+class BroadcastRequest(BaseModel):
+    content: str
 
 
 def compute_next_deadline(deadline_row) -> datetime:
@@ -976,6 +989,23 @@ async def home_websocket_endpoint(websocket: WebSocket):
         await websocket.accept()
         # register under "__home__" so send_to_user can deliver cross-group nudges here
         manager.connect(websocket, "__home__", current_user.id)
+
+        # send broadcasts from the last 7 days so the client has recent history on connect
+        cutoff = datetime.utcnow() - timedelta(days=7)
+        recent_broadcasts = (
+            db.query(models.Broadcast)
+            .filter(models.Broadcast.created_at >= cutoff)
+            .order_by(models.Broadcast.created_at.asc())
+            .all()
+        )
+        for b in recent_broadcasts:
+            await websocket.send_text(json.dumps({
+                "type": "broadcast",
+                "id": b.id,
+                "content": b.content,
+                "sent_by": b.sent_by.username if b.sent_by else None,
+                "created_at": b.created_at.isoformat() + "Z",
+            }))
 
         try:
             while True:
@@ -2294,6 +2324,75 @@ def mark_notification_read(
     notif.is_read = True
     db.commit()
     return {"status": "ok"}
+
+
+@app.post("/broadcast")
+async def send_broadcast(
+    body: BroadcastRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role not in ("coordinator", "admin"):
+        raise HTTPException(status_code=403, detail="Coordinator or admin access required.")
+    if not body.content.strip():
+        raise HTTPException(status_code=400, detail="Content cannot be empty.")
+    if len(body.content) > 1000:
+        raise HTTPException(status_code=400, detail="Content must be 1000 characters or fewer.")
+    broadcast = models.Broadcast(content=body.content, sent_by_user_id=current_user.id)
+    db.add(broadcast)
+    db.commit()
+    db.refresh(broadcast)
+    payload = {
+        "type": "broadcast",
+        "id": broadcast.id,
+        "content": broadcast.content,
+        "sent_by": current_user.username,
+        "created_at": broadcast.created_at.isoformat() + "Z",
+    }
+    all_user_ids: set[int] = set()
+    for group_connections in list(manager.active_connections.values()):
+        all_user_ids.update(group_connections.keys())
+    for uid in all_user_ids:
+        await manager.send_to_user(uid, payload)
+    return payload
+
+
+@app.get("/broadcasts")
+def get_broadcasts(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    rows = (
+        db.query(models.Broadcast)
+        .order_by(models.Broadcast.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    return [
+        {
+            "id": b.id,
+            "content": b.content,
+            "sent_by": b.sent_by.username if b.sent_by else None,
+            "created_at": b.created_at.isoformat() + "Z",
+        }
+        for b in rows
+    ]
+
+
+@app.delete("/broadcasts/{broadcast_id}")
+def delete_broadcast(
+    broadcast_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role not in ("coordinator", "admin"):
+        raise HTTPException(status_code=403, detail="Coordinator or admin access required.")
+    broadcast = db.query(models.Broadcast).filter(models.Broadcast.id == broadcast_id).first()
+    if not broadcast:
+        raise HTTPException(status_code=404, detail="Broadcast not found.")
+    db.delete(broadcast)
+    db.commit()
+    return {"message": "Broadcast deleted."}
 
 
 @app.get("/groups/{group_id}/unread")

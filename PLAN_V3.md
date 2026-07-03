@@ -45,9 +45,13 @@ components for the final submission.
 
 ## Phase 2 — Global Broadcast
 
-**Coordinator broadcast**
-- Coordinator can send a global announcement to all users
-- Appears as a separate notification or announcement, not inside a group chat
+**Coordinator broadcast** — ✓ Complete
+- Coordinator and admin can send announcements to all users
+- Real-time delivery via WebSocket to all connected users
+- Offline users receive recent broadcasts on next login
+- Announcement banner shown above group list when broadcasts exist
+- All users can view broadcast history in the Announcements modal
+- Coordinator and admin can delete broadcasts
 
 ---
 
