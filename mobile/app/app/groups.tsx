@@ -45,6 +45,13 @@ export default function Groups() {
   const [broadcastError, setBroadcastError] = useState("");
   const [hasNewBroadcast, setHasNewBroadcast] = useState(false);
 
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackType, setFeedbackType] = useState<"general" | "bug">("general");
+  const [feedbackContent, setFeedbackContent] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
+  const [feedbackSuccess, setFeedbackSuccess] = useState(false);
+
   // Refresh immediately on focus, poll every 15s, and open a home WebSocket so
   // cross-group nudges from send_to_user land here and trigger an immediate refresh
   useFocusEffect(useCallback(() => {
@@ -204,6 +211,44 @@ export default function Groups() {
       minute: "2-digit",
       hour12: true,
     }).format(new Date(iso));
+  }
+
+  function openFeedback() {
+    setFeedbackType("general");
+    setFeedbackContent("");
+    setFeedbackError("");
+    setFeedbackSuccess(false);
+    setShowFeedback(true);
+  }
+
+  async function handleSubmitFeedback() {
+    if (!feedbackContent.trim() || feedbackSubmitting) return;
+    setFeedbackSubmitting(true);
+    setFeedbackError("");
+    try {
+      const res = await fetch(`${API_BASE}/feedback`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ content: feedbackContent.trim(), feedback_type: feedbackType }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(err.detail ?? "Unknown error");
+      }
+      setFeedbackContent("");
+      setFeedbackSuccess(true);
+      setTimeout(() => {
+        setShowFeedback(false);
+        setFeedbackSuccess(false);
+      }, 2000);
+    } catch (e: unknown) {
+      setFeedbackError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setFeedbackSubmitting(false);
+    }
   }
 
   const handleLogout = async () => {
@@ -394,6 +439,84 @@ export default function Groups() {
         </TouchableOpacity>
       </Modal>
 
+      {/* ── Feedback Modal ────────────────────────────────────── */}
+      <Modal
+        visible={showFeedback}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowFeedback(false)}
+      >
+        <TouchableOpacity
+          style={styles.settingsOverlay}
+          activeOpacity={1}
+          onPress={() => setShowFeedback(false)}
+        >
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.settingsContent}>
+                <Text style={styles.settingsTitle}>Send Feedback</Text>
+
+                <View style={styles.feedbackTypeRow}>
+                  {(["general", "bug"] as const).map((t) => (
+                    <TouchableOpacity
+                      key={t}
+                      style={[styles.feedbackTypePill, feedbackType === t && styles.feedbackTypePillActive]}
+                      onPress={() => setFeedbackType(t)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.feedbackTypePillText, feedbackType === t && styles.feedbackTypePillTextActive]}>
+                        {t === "general" ? "General" : "Bug Report"}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <TextInput
+                  style={styles.feedbackInput}
+                  value={feedbackContent}
+                  onChangeText={setFeedbackContent}
+                  placeholder="Describe your feedback..."
+                  placeholderTextColor="#9e9e9e"
+                  multiline
+                  maxLength={2000}
+                  textAlignVertical="top"
+                />
+                <Text style={styles.feedbackCharCount}>{feedbackContent.length} / 2000</Text>
+
+                {feedbackError !== "" && (
+                  <Text style={styles.settingsError}>{feedbackError}</Text>
+                )}
+                {feedbackSuccess && (
+                  <Text style={styles.settingsSuccess}>Thank you for your feedback!</Text>
+                )}
+
+                <View style={styles.settingsActions}>
+                  <TouchableOpacity
+                    style={styles.settingsCancelBtn}
+                    onPress={() => setShowFeedback(false)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.settingsCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.settingsSaveBtn, feedbackSubmitting && styles.settingsBtnDisabled]}
+                    onPress={handleSubmitFeedback}
+                    disabled={feedbackSubmitting}
+                    activeOpacity={0.8}
+                  >
+                    {feedbackSubmitting ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={styles.settingsSaveText}>Submit</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
+      </Modal>
+
       <View style={styles.header}>
         <View style={{ flex: 1, marginRight: 8 }}>
           <Text style={styles.headerTitle}>MS3015 Chat</Text>
@@ -499,6 +622,10 @@ export default function Groups() {
           </View>
         )}
       </View>
+
+      <TouchableOpacity style={styles.feedbackBtn} onPress={openFeedback} activeOpacity={0.8}>
+        <Text style={styles.feedbackBtnText}>Feedback</Text>
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -506,7 +633,7 @@ export default function Groups() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#ffffff",
+    backgroundColor: "#f0f4f8",
   },
   contentContainer: {
     flex: 1,
@@ -858,5 +985,64 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#d32f2f",
     fontWeight: "600",
+  },
+  // feedback button + modal
+  feedbackBtn: {
+    position: "absolute",
+    bottom: 16,
+    left: 16,
+    backgroundColor: "#f0f4f8",
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderWidth: 2,
+    borderColor: "#1a1a1a",
+  },
+  feedbackBtnText: {
+    fontSize: 13,
+    color: "#1a1a1a",
+    fontWeight: "500",
+  },
+  feedbackTypeRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 12,
+  },
+  feedbackTypePill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    backgroundColor: "#f5f5f5",
+  },
+  feedbackTypePillActive: {
+    backgroundColor: "#1976d2",
+    borderColor: "#1976d2",
+  },
+  feedbackTypePillText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#757575",
+  },
+  feedbackTypePillTextActive: {
+    color: "#ffffff",
+  },
+  feedbackInput: {
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: "#1a1a1a",
+    backgroundColor: "#f5f5f5",
+    minHeight: 120,
+  },
+  feedbackCharCount: {
+    fontSize: 11,
+    color: "#9e9e9e",
+    textAlign: "right",
+    marginTop: 4,
   },
 });

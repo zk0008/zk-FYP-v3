@@ -186,3 +186,16 @@ class Broadcast(Base):
 
     sent_by = relationship("User")
 
+
+class Feedback(Base):
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    content = Column(Text, nullable=False)
+    feedback_type = Column(String, nullable=False)  # "general" or "bug"
+    submitted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    is_resolved = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    submitted_by = relationship("User")
+

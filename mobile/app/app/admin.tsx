@@ -43,6 +43,15 @@ type GroupMember = {
   role: string;
 };
 
+type FeedbackItem = {
+  id: number;
+  content: string;
+  feedback_type: string;
+  submitted_by: string | null;
+  is_resolved: boolean;
+  created_at: string;
+};
+
 const ROLES = ["admin", "coordinator", "supervisor", "student"] as const;
 type Role = (typeof ROLES)[number];
 
@@ -102,10 +111,16 @@ export default function Admin() {
   const [importError, setImportError] = useState("");
   const [importResult, setImportResult] = useState<{ created: string[]; skipped: string[]; errors: string[] } | null>(null);
 
+  const [feedbackItems, setFeedbackItems] = useState<FeedbackItem[]>([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(true);
+  const [showAllFeedback, setShowAllFeedback] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
+
   useEffect(() => {
     if (!token) return;
     loadUsers();
     loadGroups();
+    loadFeedback();
   }, [token]);
 
   function loadUsers() {
@@ -430,6 +445,48 @@ export default function Admin() {
       setImportStatus("error");
       setImportError(e instanceof Error ? e.message : "Unknown error");
     }
+  }
+
+  function loadFeedback() {
+    setFeedbackLoading(true);
+    fetch(`${API_BASE}/admin/feedback`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load feedback");
+        return res.json() as Promise<FeedbackItem[]>;
+      })
+      .then(setFeedbackItems)
+      .catch(() => {})
+      .finally(() => setFeedbackLoading(false));
+  }
+
+  async function handleToggleResolved(id: number) {
+    setFeedbackError("");
+    try {
+      const res = await fetch(`${API_BASE}/admin/feedback/${id}/resolve`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const updated = await res.json() as FeedbackItem;
+        setFeedbackItems((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
+      }
+    } catch {
+      setFeedbackError("Failed to update. Please try again.");
+      setTimeout(() => setFeedbackError(""), 3000);
+    }
+  }
+
+  function formatFeedbackDate(iso: string): string {
+    return new Intl.DateTimeFormat("en-SG", {
+      timeZone: "Asia/Singapore",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(new Date(iso));
   }
 
   return (
@@ -970,6 +1027,60 @@ export default function Admin() {
             );
           })}
 
+        {/* ── Section C: Feedback ─────────────────────────────── */}
+        <Text style={styles.sectionLabel}>Feedback</Text>
+        {feedbackError !== "" && (
+          <Text style={styles.errorText}>{feedbackError}</Text>
+        )}
+
+        {feedbackLoading && (
+          <ActivityIndicator size="large" color="#1976d2" style={{ marginVertical: 16 }} />
+        )}
+
+        {!feedbackLoading && feedbackItems.length === 0 && (
+          <Text style={[styles.mutedText, { marginBottom: 12 }]}>No feedback submitted yet.</Text>
+        )}
+
+        {!feedbackLoading &&
+          (showAllFeedback ? feedbackItems : feedbackItems.slice(0, 5)).map((item) => (
+            <View key={item.id} style={[styles.card, item.is_resolved && styles.feedbackCardResolved]}>
+              <View style={styles.feedbackCardHeader}>
+                <View style={[styles.feedbackTypeBadge, item.feedback_type === "bug" ? styles.feedbackTypeBadgeBug : styles.feedbackTypeBadgeGeneral]}>
+                  <Text style={styles.feedbackTypeBadgeText}>
+                    {item.feedback_type === "bug" ? "Bug Report" : "General"}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.resolveBtn}
+                  onPress={() => handleToggleResolved(item.id)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.resolveBtnText}>
+                    {item.is_resolved ? "Mark Unresolved" : "Mark Resolved"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={[styles.feedbackItemContent, item.is_resolved && styles.feedbackItemContentResolved]}>
+                {item.content}
+              </Text>
+              <Text style={styles.feedbackItemMeta}>
+                {item.submitted_by ?? "Anonymous"} · {formatFeedbackDate(item.created_at)}
+              </Text>
+            </View>
+          ))}
+
+        {!feedbackLoading && feedbackItems.length > 5 && (
+          <TouchableOpacity
+            style={styles.feedbackToggleBtn}
+            onPress={() => setShowAllFeedback((v) => !v)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.feedbackToggleBtnText}>
+              {showAllFeedback ? "Show Less" : `View More (${feedbackItems.length - 5} more)`}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         <View style={{ height: 32 }} />
       </ScrollView>
     </View>
@@ -1317,5 +1428,69 @@ const styles = StyleSheet.create({
     color: "#757575",
     width: 80,
     textAlign: "right",
+  },
+  // feedback section
+  feedbackCardResolved: {
+    opacity: 0.5,
+  },
+  feedbackCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  feedbackTypeBadge: {
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  feedbackTypeBadgeGeneral: {
+    backgroundColor: "#1976d2",
+  },
+  feedbackTypeBadgeBug: {
+    backgroundColor: "#d32f2f",
+  },
+  feedbackTypeBadgeText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  resolveBtn: {
+    borderWidth: 1,
+    borderColor: "#9e9e9e",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    minHeight: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  resolveBtnText: {
+    color: "#9e9e9e",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  feedbackItemContent: {
+    fontSize: 14,
+    color: "#1a1a1a",
+    lineHeight: 20,
+    marginBottom: 6,
+  },
+  feedbackItemContentResolved: {
+    color: "#9e9e9e",
+  },
+  feedbackItemMeta: {
+    fontSize: 12,
+    color: "#9e9e9e",
+  },
+  feedbackToggleBtn: {
+    alignItems: "center",
+    paddingVertical: 10,
+    marginBottom: 4,
+  },
+  feedbackToggleBtnText: {
+    fontSize: 13,
+    color: "#1976d2",
+    fontWeight: "600",
   },
 });

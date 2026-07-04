@@ -57,7 +57,12 @@ components for the final submission.
 
 ## Phase 3 — Feedback and Issue Reporting
 
-- Users can submit feedback or report issues from within the app
+**Feedback and issue reporting** — ✓ Complete
+- All users can submit general feedback or bug reports from the groups screen
+- Feedback stored in database with type, content, submitter, and timestamp
+- Admin can view all feedback in the admin dashboard
+- Admin can toggle resolved/unresolved status on each feedback item
+- Latest 5 shown by default with View More option
 
 ---
 

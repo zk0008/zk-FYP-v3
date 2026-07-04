@@ -309,6 +309,17 @@ async def startup_event():
             )
         """))
         conn.commit()
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                feedback_type TEXT NOT NULL,
+                submitted_by_user_id INTEGER REFERENCES users(id),
+                is_resolved INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        conn.commit()
     # Copy any existing Group.student_summary text into the new student_summaries table
     migrate_student_summaries()
     # Ensure uploads directories exist
@@ -437,6 +448,11 @@ class ChangePasswordRequest(BaseModel):
 
 class BroadcastRequest(BaseModel):
     content: str
+
+
+class FeedbackRequest(BaseModel):
+    content: str
+    feedback_type: str
 
 
 def compute_next_deadline(deadline_row) -> datetime:
@@ -3457,3 +3473,81 @@ def admin_import_students(
         created.append(username)
     db.commit()
     return {"created": created, "skipped": skipped, "errors": errors}
+
+
+@app.post("/feedback", status_code=201)
+def submit_feedback(
+    body: FeedbackRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not body.content.strip():
+        raise HTTPException(status_code=400, detail="Content cannot be empty.")
+    if len(body.content) > 2000:
+        raise HTTPException(status_code=400, detail="Content must be 2000 characters or fewer.")
+    if body.feedback_type not in ("general", "bug"):
+        raise HTTPException(status_code=400, detail="feedback_type must be 'general' or 'bug'.")
+    item = models.Feedback(
+        content=body.content,
+        feedback_type=body.feedback_type,
+        submitted_by_user_id=current_user.id,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {
+        "id": item.id,
+        "content": item.content,
+        "feedback_type": item.feedback_type,
+        "submitted_by": current_user.username,
+        "created_at": item.created_at.isoformat() + "Z",
+    }
+
+
+@app.get("/admin/feedback")
+def get_all_feedback(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    rows = (
+        db.query(models.Feedback)
+        .order_by(models.Feedback.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": f.id,
+            "content": f.content,
+            "feedback_type": f.feedback_type,
+            "submitted_by": f.submitted_by.username if f.submitted_by else None,
+            "is_resolved": f.is_resolved,
+            "created_at": f.created_at.isoformat() + "Z",
+        }
+        for f in rows
+    ]
+
+
+@app.put("/admin/feedback/{feedback_id}/resolve")
+def toggle_feedback_resolved(
+    feedback_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    item = db.query(models.Feedback).filter(models.Feedback.id == feedback_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Feedback not found.")
+    item.is_resolved = not item.is_resolved
+    db.commit()
+    db.refresh(item)
+    return {
+        "id": item.id,
+        "content": item.content,
+        "feedback_type": item.feedback_type,
+        "submitted_by": item.submitted_by.username if item.submitted_by else None,
+        "is_resolved": item.is_resolved,
+        "created_at": item.created_at.isoformat() + "Z",
+    }
