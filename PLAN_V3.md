@@ -26,20 +26,21 @@ components for the final submission.
 - Requires confirmation before deletion
 - Cannot delete own account
 
-**Microsoft authentication**
-- NTU users (students, supervisors, coordinators) log in via Microsoft authentication
-- User accounts are created by fetching from an Excel file
+**Microsoft authentication** — Deferred
+- Blocked by Microsoft's May 2025 policy change requiring a paid Entra ID license for new tenant creation
+- Architecture supports Microsoft auth — implementation can be completed when NTU IT provides an Azure AD tenant
+- Current login uses username and password authentication
 
-**Dummy supervisor accounts**
-- Create dummy accounts for supervisors for testing and demonstration
+**Dummy supervisor accounts** — ✓ Complete
+- Supervisor accounts can be created manually by admin through the Admin Dashboard
 
-**Group allocation**
-- Fixed list for group allocation when creating group chats
-- Basic modifications to group assignments supported
+**Group allocation** — ✓ Complete
+- Admin can assign users to groups through the Admin Dashboard
+- Excel import automatically assigns students to groups based on the file
 
-**External users**
-- External users register via a separate create new account flow
-- Not linked to Microsoft authentication
+**External users** — Deferred
+- Deferred — admin account creation covers all current user types
+- Can be revisited if external non-NTU users need access in future
 
 ---
 
