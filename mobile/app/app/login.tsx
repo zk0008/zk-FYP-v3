@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -11,15 +11,70 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "../hooks/useAuth";
+import * as AuthSession from "expo-auth-session";
+import * as WebBrowser from "expo-web-browser";
+
+// required so the auth browser tab can hand back the result on iOS/Android
+WebBrowser.maybeCompleteAuthSession();
+
+const MS_CLIENT_ID =
+  process.env.EXPO_PUBLIC_MICROSOFT_CLIENT_ID ?? "03b66d41-d374-4fa9-afcb-0bb1850698d3";
+
+const MS_DISCOVERY = {
+  authorizationEndpoint:
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+  tokenEndpoint: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+};
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, microsoftLogin } = useAuth();
   const router = useRouter();
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [msLoading, setMsLoading] = useState(false);
+
+  const [request, response, promptAsync] = AuthSession.useAuthRequest(
+    {
+      clientId: MS_CLIENT_ID,
+      scopes: ["openid", "profile", "email"],
+      redirectUri: AuthSession.makeRedirectUri({ scheme: "zkfyp" }),
+      extraParams: { prompt: "select_account" },
+    },
+    MS_DISCOVERY
+  );
+
+  useEffect(() => {
+    if (!response) return;
+    if (response.type === "success") {
+      const code = response.params.code;
+      setMsLoading(true);
+      setError("");
+      (async () => {
+        try {
+          const tokenResponse = await AuthSession.exchangeCodeAsync(
+            {
+              clientId: MS_CLIENT_ID,
+              code,
+              redirectUri: AuthSession.makeRedirectUri({ scheme: "zkfyp" }),
+              extraParams: { code_verifier: request?.codeVerifier ?? "" },
+            },
+            MS_DISCOVERY
+          );
+          await microsoftLogin(tokenResponse.idToken ?? "");
+          router.replace("/groups");
+        } catch (err: any) {
+          setError(err.message ?? "Microsoft login failed. Please try again.");
+        } finally {
+          setMsLoading(false);
+        }
+      })();
+    } else if (response.type === "error") {
+      setError(response.error?.message ?? "Microsoft sign-in failed.");
+    }
+  }, [response, request]);
 
   const handleLogin = async () => {
     if (!username.trim() || !password.trim()) {
@@ -81,6 +136,19 @@ export default function Login() {
             <ActivityIndicator color="#fff" />
           ) : (
             <Text style={styles.buttonText}>Login</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.msButton, msLoading && styles.msButtonDisabled]}
+          onPress={() => promptAsync()}
+          disabled={msLoading}
+          activeOpacity={0.8}
+        >
+          {msLoading ? (
+            <ActivityIndicator color="#1a1a1a" />
+          ) : (
+            <Text style={styles.msButtonText}>Sign in with Microsoft</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -151,6 +219,24 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  msButton: {
+    height: 48,
+    backgroundColor: "#ffffff",
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#1a1a1a",
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 12,
+  },
+  msButtonDisabled: {
+    borderColor: "#9e9e9e",
+  },
+  msButtonText: {
+    color: "#1a1a1a",
     fontSize: 16,
     fontWeight: "600",
   },

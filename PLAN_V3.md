@@ -26,10 +26,13 @@ components for the final submission.
 - Requires confirmation before deletion
 - Cannot delete own account
 
-**Microsoft authentication** — Deferred
-- Blocked by Microsoft's May 2025 policy change requiring a paid Entra ID license for new tenant creation
-- Architecture supports Microsoft auth — implementation can be completed when NTU IT provides an Azure AD tenant
-- Current login uses username and password authentication
+**Microsoft authentication** — ✓ Complete
+- Implemented using a personal Azure AD tenant registered as multitenant
+- OAuth Authorization Code + PKCE flow via expo-auth-session
+- Backend verifies Microsoft-issued tokens against Microsoft's public keys
+- Only @e.ntu.edu.sg email addresses are accepted — all other domains rejected
+- New NTU accounts are created automatically on first login
+- Existing username/password login remains fully functional alongside Microsoft login
 
 **Dummy supervisor accounts** — ✓ Complete
 - Supervisor accounts can be created manually by admin through the Admin Dashboard
