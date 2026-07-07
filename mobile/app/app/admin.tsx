@@ -105,11 +105,12 @@ export default function Admin() {
   const [showUserPicker, setShowUserPicker] = useState<Record<number, boolean>>({});
   const [addMemberSaving, setAddMemberSaving] = useState<Record<number, boolean>>({});
   const [removeSaving, setRemoveSaving] = useState<Record<string, boolean>>({});
+  const [deletingGroup, setDeletingGroup] = useState<number | null>(null);
 
   const [showImport, setShowImport] = useState(false);
   const [importFile, setImportFile] = useState<{ name: string; uri: string } | null>(null);
-  const [importPreview, setImportPreview] = useState<{ matric_number: string; full_name: string; group_name: string }[]>([]);
-  const [importParsed, setImportParsed] = useState<{ username: string; matric_number: string; full_name: string; email: string; group_name: string; supervisor_email?: string }[]>([]);
+  const [importPreview, setImportPreview] = useState<{ username: string; full_name: string; group_name: string }[]>([]);
+  const [importParsed, setImportParsed] = useState<{ full_name: string; username: string; student_id: string; group_id: string }[]>([]);
   const [importStatus, setImportStatus] = useState<"idle" | "parsing" | "importing" | "done" | "error">("idle");
   const [importError, setImportError] = useState("");
   const [importResult, setImportResult] = useState<{ created: string[]; skipped: string[]; errors: string[] } | null>(null);
@@ -118,6 +119,11 @@ export default function Admin() {
   const [feedbackLoading, setFeedbackLoading] = useState(true);
   const [showAllFeedback, setShowAllFeedback] = useState(false);
   const [feedbackError, setFeedbackError] = useState("");
+
+  const [showNewGroup, setShowNewGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupStatus, setNewGroupStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [newGroupError, setNewGroupError] = useState("");
 
   useEffect(() => {
     if (!token) return;
@@ -362,6 +368,78 @@ export default function Admin() {
     }
   }
 
+  function handleDeleteGroup(groupId: number) {
+    Alert.alert(
+      "Delete Group",
+      "This will permanently delete this group and ALL its messages, documents, and summaries. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setDeletingGroup(groupId);
+            try {
+              const res = await fetch(`${API_BASE}/admin/groups/${groupId}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+                throw new Error(err.detail ?? "Unknown error");
+              }
+              setGroups((prev) => prev.filter((g) => g.id !== groupId));
+              setExpandedGroupId(null);
+            } catch (e: unknown) {
+              setGroupFeedback((prev) => ({
+                ...prev,
+                [groupId]: { msg: e instanceof Error ? e.message : "Failed to delete group.", ok: false },
+              }));
+            } finally {
+              setDeletingGroup(null);
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  function openNewGroup() {
+    setNewGroupName("");
+    setNewGroupStatus("idle");
+    setNewGroupError("");
+    setShowNewGroup(true);
+  }
+
+  async function handleCreateGroup() {
+    if (!newGroupName.trim()) {
+      setNewGroupError("Group name is required.");
+      return;
+    }
+    setNewGroupStatus("saving");
+    setNewGroupError("");
+    try {
+      const res = await fetch(`${API_BASE}/admin/groups`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: newGroupName.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(err.detail ?? "Unknown error");
+      }
+      setNewGroupStatus("success");
+      loadGroups();
+      setTimeout(() => { setShowNewGroup(false); setNewGroupStatus("idle"); }, 1200);
+    } catch (e: unknown) {
+      setNewGroupStatus("error");
+      setNewGroupError(e instanceof Error ? e.message : "Unknown error");
+    }
+  }
+
   function openImport() {
     setShowImport(true);
     setImportFile(null);
@@ -399,21 +477,19 @@ export default function Admin() {
             norm[key.toLowerCase().trim()] = String(row[key] ?? "").trim();
           }
           return {
-            username: norm["username"] ?? "",
-            matric_number: norm["matric_number"] ?? "",
             full_name: norm["full_name"] ?? "",
-            email: norm["email"] ?? "",
-            group_name: norm["group_name"] ?? "",
-            supervisor_email: norm["supervisor_email"] || undefined,
+            username: norm["username"] ?? "",
+            student_id: norm["student_id"] ?? "",
+            group_id: norm["group_id"] ?? "",
           };
         })
-        .filter((r) => r.username && r.matric_number && r.email && r.group_name);
+        .filter((r) => r.full_name && r.username && r.group_id);
       setImportParsed(parsed);
       setImportPreview(
         parsed.slice(0, 5).map((r) => ({
-          matric_number: r.matric_number,
+          username: r.username,
           full_name: r.full_name,
-          group_name: r.group_name,
+          group_name: `Group ${r.group_id}`,
         }))
       );
       setImportStatus("idle");
@@ -749,8 +825,8 @@ export default function Admin() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Import Students</Text>
             <Text style={styles.importInstructions}>
-              Select an Excel file (.xlsx) with columns: matric_number, full_name, email, group_name, supervisor_email (optional).
-              Password will be set to the last 4 characters of the matric number.
+              Select an Excel file (.xlsx) with columns: full_name, username, student_id (optional), group_id.
+              A random unusable password is set — students must sign in with Microsoft.
             </Text>
 
             <TouchableOpacity
@@ -771,7 +847,7 @@ export default function Admin() {
                 </Text>
                 {importPreview.map((row, i) => (
                   <View key={i} style={styles.previewRow}>
-                    <Text style={styles.previewMatric}>{row.matric_number}</Text>
+                    <Text style={styles.previewUsername}>{row.username}</Text>
                     <Text style={styles.previewName} numberOfLines={1}>{row.full_name}</Text>
                     <Text style={styles.previewGroup} numberOfLines={1}>{row.group_name}</Text>
                   </View>
@@ -821,6 +897,58 @@ export default function Admin() {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* ── New Group Modal ────────────────────────────────────── */}
+      <Modal
+        visible={showNewGroup}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowNewGroup(false)}
+      >
+        <TouchableOpacity style={styles.newGroupOverlay} activeOpacity={1} onPress={() => setShowNewGroup(false)}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.newGroupContent}>
+                <ScrollView keyboardShouldPersistTaps="handled">
+                  <Text style={styles.modalTitle}>New Group</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={newGroupName}
+                    onChangeText={setNewGroupName}
+                    placeholder="Group name"
+                    placeholderTextColor="#9e9e9e"
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
+                  {newGroupStatus === "error" && <Text style={styles.errorText}>{newGroupError}</Text>}
+                  {newGroupStatus === "success" && <Text style={styles.successText}>✓ Group created.</Text>}
+                  <View style={styles.modalActions}>
+                    <TouchableOpacity
+                      style={styles.outlineBtn}
+                      onPress={() => setShowNewGroup(false)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.outlineBtnText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, { flex: 1 }, newGroupStatus === "saving" && styles.btnDisabled]}
+                      onPress={handleCreateGroup}
+                      activeOpacity={0.8}
+                      disabled={newGroupStatus === "saving"}
+                    >
+                      {newGroupStatus === "saving" ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <Text style={styles.primaryBtnText}>Create</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
+              </View>
+            </TouchableOpacity>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
       </Modal>
 
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -878,6 +1006,14 @@ export default function Admin() {
 
         {/* ── Section B: Group Allocation ───────────────────────── */}
         <Text style={styles.sectionLabel}>Group Allocation</Text>
+
+        <TouchableOpacity
+          style={[styles.primaryBtn, { marginBottom: 10 }]}
+          onPress={openNewGroup}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.primaryBtnText}>+ New Group</Text>
+        </TouchableOpacity>
 
         {groupsLoading && (
           <ActivityIndicator size="large" color="#1976d2" style={{ marginVertical: 16 }} />
@@ -1038,6 +1174,19 @@ export default function Admin() {
                         {feedback.msg}
                       </Text>
                     ) : null}
+
+                    <TouchableOpacity
+                      style={[styles.deleteGroupBtn, deletingGroup === group.id && styles.btnDisabled]}
+                      onPress={() => handleDeleteGroup(group.id)}
+                      activeOpacity={0.8}
+                      disabled={deletingGroup === group.id}
+                    >
+                      {deletingGroup === group.id ? (
+                        <ActivityIndicator size="small" color="#d32f2f" />
+                      ) : (
+                        <Text style={styles.deleteGroupBtnText}>Delete Group</Text>
+                      )}
+                    </TouchableOpacity>
                   </View>
                 )}
               </View>
@@ -1377,6 +1526,21 @@ const styles = StyleSheet.create({
     marginTop: 12,
     alignItems: "center",
   },
+  deleteGroupBtn: {
+    borderWidth: 1,
+    borderColor: "#d32f2f",
+    borderRadius: 8,
+    paddingVertical: 10,
+    marginTop: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    minHeight: 40,
+  },
+  deleteGroupBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#d32f2f",
+  },
   pickerOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.4)",
@@ -1431,7 +1595,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 3,
   },
-  previewMatric: {
+  previewUsername: {
     fontSize: 12,
     fontWeight: "600",
     color: "#1a1a1a",
@@ -1511,5 +1675,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#1976d2",
     fontWeight: "600",
+  },
+  newGroupOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  newGroupContent: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    padding: 24,
+    overflow: "hidden",
   },
 });

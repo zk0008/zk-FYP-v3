@@ -11,11 +11,14 @@ components for the final submission.
 - Admin role added with full user management (create, edit, deactivate users)
 - Admin dashboard with user list, role management, and group allocation UI
 
-**Excel import for student account creation** — ✓ Complete
-- Admin uploads an .xlsx file with columns: username, matric_number, full_name, email, group_name, supervisor_email (optional)
-- Students are created with temporary password (last 4 characters of matric number)
-- Automatically assigned to groups and supervisors based on the file
+**Excel import for student account creation** — ✓ Complete (updated)
+- Admin uploads an .xlsx file with columns: full_name, username, student_id, group_id
+- Username matches the NTU email prefix (e.g. username J0008TAN maps to J0008TAN@e.ntu.edu.sg)
+- Students are Microsoft-login-only — no working local password is set
+- Automatically assigned to groups based on group_id (e.g. group_id 1 maps to "Group 1")
 - Duplicate usernames are skipped; inactive accounts are reactivated on re-import
+- Supervisor assignment is handled separately, not part of this import
+- Students who log in via Microsoft after import are automatically linked to their pre-assigned group
 
 **Change password** — ✓ Complete
 - All users can change their password from the group list screen
@@ -40,6 +43,10 @@ components for the final submission.
 **Group allocation** — ✓ Complete
 - Admin can assign users to groups through the Admin Dashboard
 - Excel import automatically assigns students to groups based on the file
+
+**Admin group management** — ✓ Complete
+- Admin can create new groups
+- Admin can permanently delete groups and all associated data
 
 **External users** — Deferred
 - Deferred — admin account creation covers all current user types
