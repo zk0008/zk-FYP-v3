@@ -11,6 +11,7 @@ import {
 import { useRouter, Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import { useAuth } from "../hooks/useAuth";
+import { Ionicons } from "@expo/vector-icons";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 
@@ -300,6 +301,7 @@ export default function SupervisorDashboard() {
           headerShown: true,
           title: "Supervisor Dashboard",
           headerStyle: { backgroundColor: "#ffffff" },
+          headerTitleAlign: "center",
           headerTitleStyle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a" },
           headerShadowVisible: true,
           headerLeft: () => (
@@ -308,7 +310,8 @@ export default function SupervisorDashboard() {
               style={styles.backBtn}
               activeOpacity={0.7}
             >
-              <Text style={styles.backBtnText} numberOfLines={1}>‹ Groups</Text>
+              <Ionicons name="chevron-back" size={20} color="#1976d2" />
+              <Text style={styles.backBtnText} numberOfLines={1}> Groups</Text>
             </TouchableOpacity>
           ),
         }}
@@ -870,7 +873,7 @@ const styles = StyleSheet.create({
   backBtnText: {
     color: "#1976d2",
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   scroll: {
     paddingHorizontal: 16,

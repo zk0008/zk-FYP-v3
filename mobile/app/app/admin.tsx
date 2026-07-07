@@ -10,10 +10,13 @@ import {
   Modal,
   Alert,
   StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { useRouter, Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import { useAuth } from "../hooks/useAuth";
+import { Ionicons } from "@expo/vector-icons";
 import * as XLSX from "xlsx";
 import * as FileSystem from "expo-file-system/legacy";
 import * as DocumentPicker from "expo-document-picker";
@@ -496,6 +499,7 @@ export default function Admin() {
           headerShown: true,
           title: "Admin Dashboard",
           headerStyle: { backgroundColor: "#ffffff" },
+          headerTitleAlign: "center",
           headerTitleStyle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a" },
           headerShadowVisible: true,
           headerLeft: () => (
@@ -504,7 +508,8 @@ export default function Admin() {
               style={styles.backBtn}
               activeOpacity={0.7}
             >
-              <Text style={styles.backBtnText}>‹ Groups</Text>
+              <Ionicons name="chevron-back" size={20} color="#1976d2" />
+              <Text style={styles.backBtnText}> Groups</Text>
             </TouchableOpacity>
           ),
         }}
@@ -517,8 +522,11 @@ export default function Admin() {
         animationType="slide"
         onRequestClose={() => setShowAddUser(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddUser(false)}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalContent}>
+              <ScrollView keyboardShouldPersistTaps="handled">
             <Text style={styles.modalTitle}>Add User</Text>
 
             <Text style={styles.fieldLabel}>Username *</Text>
@@ -611,8 +619,11 @@ export default function Admin() {
                 )}
               </TouchableOpacity>
             </View>
-          </View>
-        </View>
+              </ScrollView>
+            </View>
+            </TouchableOpacity>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
       </Modal>
 
       {/* ── Edit User Modal ────────────────────────────────────── */}
@@ -622,8 +633,11 @@ export default function Admin() {
         animationType="slide"
         onRequestClose={() => setShowEditUser(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowEditUser(false)}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalContent}>
+              <ScrollView keyboardShouldPersistTaps="handled">
             <Text style={styles.modalTitle}>Edit User</Text>
             {editUser && (
               <Text style={styles.mutedText}>@{editUser.username}</Text>
@@ -717,8 +731,11 @@ export default function Admin() {
             >
               <Text style={styles.deleteBtnText}>Delete Permanently</Text>
             </TouchableOpacity>
-          </View>
-        </View>
+              </ScrollView>
+            </View>
+            </TouchableOpacity>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
       </Modal>
 
       {/* ── Import Students Modal ──────────────────────────────── */}
@@ -1099,7 +1116,7 @@ const styles = StyleSheet.create({
   backBtnText: {
     color: "#1976d2",
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   scroll: {
     paddingHorizontal: 16,
@@ -1260,8 +1277,10 @@ const styles = StyleSheet.create({
     borderColor: "#e0e0e0",
     borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 8,
     fontSize: 15,
+    lineHeight: Platform.OS === "android" ? 20 : undefined,
+    textAlignVertical: "center",
     color: "#1a1a1a",
     backgroundColor: "#f5f5f5",
     minHeight: 44,

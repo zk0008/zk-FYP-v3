@@ -14,6 +14,7 @@ export default function GroupTabLayout() {
           headerShown: true,
           title: groupName,
           headerStyle: { backgroundColor: "#ffffff" },
+          headerTitleAlign: "center",
           headerTitleStyle: { fontSize: 17, fontWeight: "700", color: "#1a1a1a" },
           headerShadowVisible: true,
           headerLeft: () => (
@@ -22,7 +23,8 @@ export default function GroupTabLayout() {
               style={styles.backBtn}
               activeOpacity={0.7}
             >
-              <Text style={styles.backBtnText} numberOfLines={1}>‹ Groups</Text>
+              <Ionicons name="chevron-back" size={20} color="#1976d2" />
+              <Text style={styles.backBtnText} numberOfLines={1}> Groups</Text>
             </TouchableOpacity>
           ),
         }}
@@ -84,6 +86,6 @@ const styles = StyleSheet.create({
   backBtnText: {
     color: "#1976d2",
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
   },
 });
