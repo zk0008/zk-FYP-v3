@@ -434,6 +434,10 @@ class AddGroupMemberRequest(BaseModel):
     role_in_group: str = "member"
 
 
+class CreateGroupRequest(BaseModel):
+    name: str
+
+
 class ExcelStudentEntry(BaseModel):
     username: str
     matric_number: str
@@ -3415,6 +3419,54 @@ def admin_list_groups(
         return int(match.group()) if match else 999
     sorted_groups = sorted(all_groups, key=lambda g: extract_group_number(g.name))
     return [{"id": g.id, "name": g.name, "string_id": g.string_id} for g in sorted_groups]
+
+
+@app.post("/admin/groups", status_code=201)
+def admin_create_group(
+    body: CreateGroupRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Group name cannot be empty.")
+    if len(name) > 100:
+        raise HTTPException(status_code=400, detail="Group name must be 100 characters or fewer.")
+    string_id = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-"))
+    if db.query(models.Group).filter(models.Group.string_id == string_id).first():
+        raise HTTPException(status_code=400, detail="A group with this name already exists.")
+    group = models.Group(name=name, string_id=string_id)
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+    return {"id": group.id, "name": group.name, "string_id": group.string_id}
+
+
+@app.delete("/admin/groups/{group_id}")
+def admin_delete_group(
+    group_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    group = db.query(models.Group).filter(models.Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found.")
+
+    # notifications first — they hold a FK to messages.id, so they must go before messages
+    db.query(models.Notification).filter(models.Notification.group_id == group_id).delete()
+    db.query(models.GroupMember).filter(models.GroupMember.group_id == group_id).delete()
+    db.query(models.Message).filter(models.Message.group_id == group_id).delete()
+    # these three use string_id as their FK, not the integer id
+    db.query(models.Document).filter(models.Document.group_id == group.string_id).delete()
+    db.query(models.Summary).filter(models.Summary.group_id == group.string_id).delete()
+    db.query(models.StudentSummary).filter(models.StudentSummary.group_id == group.string_id).delete()
+    db.delete(group)
+    db.commit()
+    return {"message": "Group and all associated data permanently deleted."}
 
 
 @app.get("/admin/groups/{group_id}/members")

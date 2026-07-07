@@ -41,6 +41,10 @@ components for the final submission.
 - Admin can assign users to groups through the Admin Dashboard
 - Excel import automatically assigns students to groups based on the file
 
+**Admin group management** — ✓ Complete
+- Admin can create new groups
+- Admin can permanently delete groups and all associated data
+
 **External users** — Deferred
 - Deferred — admin account creation covers all current user types
 - Can be revisited if external non-NTU users need access in future
