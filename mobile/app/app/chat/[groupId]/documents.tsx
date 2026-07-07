@@ -13,6 +13,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { File, Directory, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { useAuth } from "../../../hooks/useAuth";
+import { Ionicons } from "@expo/vector-icons";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 
@@ -224,7 +225,7 @@ export default function Documents() {
             {isDownloading ? (
               <ActivityIndicator size="small" color="#ffffff" />
             ) : (
-              <Text style={styles.actionBtnText}>↓</Text>
+              <Ionicons name="download-outline" size={18} color="#ffffff" />
             )}
           </TouchableOpacity>
           <TouchableOpacity

@@ -15,9 +15,11 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { useGlobalSearchParams, useFocusEffect } from "expo-router";
 import { useHeaderHeight } from "@react-navigation/elements";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../../hooks/useAuth";
 import { useWebSocket } from "../../../hooks/useWebSocket";
 import MessageBubble from "../../../components/MessageBubble";
+import { Ionicons } from "@expo/vector-icons";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 
@@ -64,6 +66,7 @@ export default function Chats() {
   const { groupId } = useGlobalSearchParams<{ groupId: string }>();
   const { token, user } = useAuth();
   const headerHeight = useHeaderHeight();
+  const insets = useSafeAreaInsets();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -73,6 +76,7 @@ export default function Chats() {
   const [showScrollDown, setShowScrollDown] = useState(false);
   // hidden until the initial scroll completes so the user doesn't see the list jump
   const [isScrollReady, setIsScrollReady] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const scrollViewRef = useRef<ScrollView>(null);
   // true when the user is within 100px of the bottom — controls auto-scroll on new messages
@@ -90,6 +94,21 @@ export default function Chats() {
       setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
     });
     return () => sub.remove();
+  }, []);
+
+  // on Android, track keyboard height so the inputBar can manually lift above it
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
+      setKeyboardHeight(e.endCoordinates.height + insets.bottom);
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
   }, []);
 
   // Fetch the group member list once on mount so the @mention picker has names to show
@@ -316,12 +335,13 @@ export default function Chats() {
       ? members.filter((m) => m.username.toLowerCase().startsWith(mentionQuery))
       : [];
 
-  return (
-    <KeyboardAvoidingView
-      style={styles.outer}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={headerHeight}
-    >
+  const inputBarStyle =
+    Platform.OS === "android"
+      ? [styles.inputBar, { marginBottom: keyboardHeight }]
+      : styles.inputBar;
+
+  const content = (
+    <>
       {wsError !== null && (
         <View style={styles.wsBanner}>
           <Text style={styles.wsBannerText}>{wsError}</Text>
@@ -404,7 +424,7 @@ export default function Chats() {
                 onPress={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
                 activeOpacity={0.8}
               >
-                <Text style={styles.scrollDownIcon}>↓</Text>
+                <Ionicons name="chevron-down" size={18} color="#ffffff" />
               </TouchableOpacity>
             )}
           </View>
@@ -439,7 +459,7 @@ export default function Chats() {
         </View>
       )}
 
-      <View style={styles.inputBar}>
+      <View style={inputBarStyle}>
         <TouchableOpacity
           style={styles.attachBtn}
           onPress={handleAttach}
@@ -468,11 +488,26 @@ export default function Chats() {
           disabled={!isConnected || !inputText.trim()}
           activeOpacity={0.8}
         >
-          <Text style={styles.sendBtnText}>↑</Text>
+          {/* size=22 keeps the icon at 50% of the 44px container, matching the scroll-down button's 18/36 ratio */}
+          <Ionicons name="arrow-up" size={22} color="#ffffff" />
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+    </>
   );
+
+  if (Platform.OS === "ios") {
+    return (
+      <KeyboardAvoidingView
+        style={styles.outer}
+        behavior="padding"
+        keyboardVerticalOffset={headerHeight}
+      >
+        {content}
+      </KeyboardAvoidingView>
+    );
+  }
+
+  return <View style={styles.outer}>{content}</View>;
 }
 
 const styles = StyleSheet.create({
@@ -537,11 +572,6 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-  scrollDownIcon: {
-    color: "#ffffff",
-    fontSize: 18,
-    lineHeight: 20,
-  },
   inputBar: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -567,6 +597,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     fontSize: 15,
+    lineHeight: 20,
+    textAlignVertical: "center",
     color: "#1a1a1a",
     backgroundColor: "#fafafa",
   },
@@ -580,11 +612,6 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: {
     backgroundColor: "#90bce8",
-  },
-  sendBtnText: {
-    color: "#ffffff",
-    fontSize: 20,
-    lineHeight: 24,
   },
   dateSeparator: {
     alignItems: "center",

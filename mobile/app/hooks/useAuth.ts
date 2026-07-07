@@ -16,6 +16,7 @@ type AuthContextValue = {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<void>;
+  microsoftLogin: (idToken: string) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -90,6 +91,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(userData);
   };
 
+  const microsoftLogin = async (idToken: string) => {
+    const res = await fetch(`${API_BASE}/auth/microsoft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id_token: idToken }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail ?? "Microsoft login failed. Please try again.");
+    }
+
+    const { access_token } = await res.json();
+
+    const meRes = await fetch(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+    if (!meRes.ok) throw new Error("Failed to load user info");
+    const userData: User = await meRes.json();
+
+    await SecureStore.setItemAsync("jwt_token", access_token);
+    await SecureStore.setItemAsync("user", JSON.stringify(userData));
+
+    setToken(access_token);
+    setUser(userData);
+  };
+
   const logout = async () => {
     await SecureStore.deleteItemAsync("jwt_token");
     await SecureStore.deleteItemAsync("user");
@@ -99,7 +127,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return React.createElement(
     AuthContext.Provider,
-    { value: { token, user, isAuthenticated: token !== null, isLoading, login, logout } },
+    { value: { token, user, isAuthenticated: token !== null, isLoading, login, microsoftLogin, logout } },
     children
   );
 }

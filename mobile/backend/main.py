@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import uuid
 import base64
 import asyncio
 import logging
@@ -22,6 +23,7 @@ from tavily import TavilyClient
 from database import Base, SessionLocal, get_db, engine
 import models  # Import models so Alembic can see them
 from auth import hash_password, decode_token, verify_password, create_access_token
+from microsoft_auth import verify_microsoft_token
 from rag import index_document, get_relevant_context, get_top_document, get_top_chunks_for_document, get_chunks_by_filename, list_indexed_filenames
 from websocket_manager import manager
 
@@ -453,6 +455,10 @@ class BroadcastRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     content: str
     feedback_type: str
+
+
+class MicrosoftLoginRequest(BaseModel):
+    id_token: str
 
 
 def compute_next_deadline(deadline_row) -> datetime:
@@ -1097,6 +1103,43 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         "access_token": access_token,
         "token_type": "bearer"
     }
+
+
+@app.post("/auth/microsoft")
+def microsoft_login(body: MicrosoftLoginRequest, db: Session = Depends(get_db)):
+    try:
+        payload = verify_microsoft_token(body.id_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid Microsoft token.")
+
+    # Microsoft tokens put the email in "email" or fall back to "preferred_username"
+    email = payload.get("email") or payload.get("preferred_username", "")
+
+    if not email.lower().endswith("@e.ntu.edu.sg"):
+        raise HTTPException(status_code=403, detail="Only NTU accounts are allowed.")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+
+    if not user:
+        username = email.split("@")[0]
+        user = models.User(
+            username=username,
+            email=email,
+            role="student",
+            # random UUID means the account has no usable password — must log in via Microsoft
+            password_hash=hash_password(str(uuid.uuid4())),
+            full_name=payload.get("name"),
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is deactivated.")
+
+    access_token = create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
 
 
 @app.get("/auth/me")
