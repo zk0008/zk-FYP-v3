@@ -31,12 +31,6 @@ export default function Groups() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [showSettings, setShowSettings] = useState(false);
-  const [currentPwd, setCurrentPwd] = useState("");
-  const [newPwd, setNewPwd] = useState("");
-  const [settingsStatus, setSettingsStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
-  const [settingsError, setSettingsError] = useState("");
-
   const [broadcasts, setBroadcasts] = useState<{ id: number; content: string; sent_by: string | null; created_at: string }[]>([]);
   const [showBroadcasts, setShowBroadcasts] = useState(false);
   const [lastSeenBroadcastId, setLastSeenBroadcastId] = useState(0);
@@ -102,42 +96,6 @@ export default function Groups() {
       router.replace("/login");
     }
   }, [isAuthenticated, isAuthLoading]);
-
-  function openChangePassword() {
-    setCurrentPwd("");
-    setNewPwd("");
-    setSettingsStatus("idle");
-    setSettingsError("");
-    setShowSettings(true);
-  }
-
-  async function handleChangePassword() {
-    if (!currentPwd || !newPwd) return;
-    setSettingsStatus("saving");
-    setSettingsError("");
-    try {
-      const res = await fetch(`${API_BASE}/auth/change-password`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ current_password: currentPwd, new_password: newPwd }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "Unknown error" }));
-        throw new Error(err.detail ?? "Unknown error");
-      }
-      setSettingsStatus("success");
-      setTimeout(() => {
-        setShowSettings(false);
-        setSettingsStatus("idle");
-      }, 1500);
-    } catch (e: unknown) {
-      setSettingsStatus("error");
-      setSettingsError(e instanceof Error ? e.message : "Unknown error");
-    }
-  }
 
   async function openBroadcasts() {
     setShowBroadcasts(true);
@@ -287,80 +245,6 @@ export default function Groups() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* ── Change Password Modal ────────────────────────────── */}
-      <Modal
-        visible={showSettings}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowSettings(false)}
-      >
-        <TouchableOpacity
-          style={styles.settingsOverlay}
-          activeOpacity={1}
-          onPress={() => setShowSettings(false)}
-        >
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
-            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
-              <View style={styles.settingsContent}>
-                <Text style={styles.settingsTitle}>Change Password</Text>
-
-                <Text style={styles.settingsLabel}>Current Password</Text>
-                <TextInput
-                  style={styles.settingsInput}
-                  value={currentPwd}
-                  onChangeText={setCurrentPwd}
-                  placeholder="current password"
-                  placeholderTextColor="#9e9e9e"
-                  secureTextEntry
-                />
-
-                <Text style={styles.settingsLabel}>New Password</Text>
-                <TextInput
-                  style={styles.settingsInput}
-                  value={newPwd}
-                  onChangeText={setNewPwd}
-                  placeholder="at least 8 characters"
-                  placeholderTextColor="#9e9e9e"
-                  secureTextEntry
-                />
-
-                {settingsStatus === "error" && (
-                  <Text style={styles.settingsError}>{settingsError}</Text>
-                )}
-                {settingsStatus === "success" && (
-                  <Text style={styles.settingsSuccess}>✓ Password updated.</Text>
-                )}
-
-                <View style={styles.settingsActions}>
-                  <TouchableOpacity
-                    style={styles.settingsCancelBtn}
-                    onPress={() => setShowSettings(false)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.settingsCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.settingsSaveBtn,
-                      settingsStatus === "saving" && styles.settingsBtnDisabled,
-                    ]}
-                    onPress={handleChangePassword}
-                    activeOpacity={0.8}
-                    disabled={settingsStatus === "saving"}
-                  >
-                    {settingsStatus === "saving" ? (
-                      <ActivityIndicator size="small" color="#ffffff" />
-                    ) : (
-                      <Text style={styles.settingsSaveText}>Save</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </TouchableOpacity>
-          </KeyboardAvoidingView>
-        </TouchableOpacity>
-      </Modal>
-
       {/* ── Announcements Modal ──────────────────────────────── */}
       <Modal
         visible={showBroadcasts}
@@ -525,13 +409,6 @@ export default function Groups() {
               {user?.username ?? ""} · {user?.role ?? ""}
             </Text>
           </View>
-          <TouchableOpacity
-            onPress={openChangePassword}
-            style={styles.settingsBtn}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.settingsBtnText}>Change Password</Text>
-          </TouchableOpacity>
         </View>
         <View style={styles.headerActions}>
           {user?.role === "coordinator" && (
@@ -623,9 +500,16 @@ export default function Groups() {
         )}
       </View>
 
-      <TouchableOpacity style={styles.feedbackBtn} onPress={openFeedback} activeOpacity={0.8}>
-        <Text style={styles.feedbackBtnText}>Feedback</Text>
-      </TouchableOpacity>
+      <View style={styles.bottomPills}>
+        <TouchableOpacity style={styles.feedbackBtn} onPress={openFeedback} activeOpacity={0.8}>
+          <Text style={styles.feedbackBtnText}>Feedback</Text>
+        </TouchableOpacity>
+        {(user?.role === "coordinator" || user?.role === "admin") && (
+          <TouchableOpacity style={styles.announceBtn} onPress={openBroadcasts} activeOpacity={0.8}>
+            <Text style={styles.announceBtnText}>Announcements</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     </SafeAreaView>
   );
 }
@@ -782,15 +666,7 @@ const styles = StyleSheet.create({
   headerSubRow: {
     marginTop: 2,
   },
-  settingsBtn: {
-    marginTop: 2,
-  },
-  settingsBtnText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#1976d2",
-  },
-  // change password modal
+  // shared modal styles — used by Announcements and Feedback modals
   settingsOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -808,28 +684,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#1a1a1a",
     marginBottom: 16,
-  },
-  settingsLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#757575",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 6,
-    marginTop: 12,
-  },
-  settingsInput: {
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 15,
-    lineHeight: 20,
-    textAlignVertical: "center",
-    color: "#1a1a1a",
-    backgroundColor: "#f5f5f5",
-    minHeight: 44,
   },
   settingsError: {
     color: "#d32f2f",
@@ -993,10 +847,14 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   // feedback button + modal
-  feedbackBtn: {
+  bottomPills: {
     position: "absolute",
     bottom: 16,
     left: 16,
+    flexDirection: "row",
+    gap: 8,
+  },
+  feedbackBtn: {
     backgroundColor: "#f0f4f8",
     borderRadius: 20,
     paddingHorizontal: 14,
@@ -1007,6 +865,19 @@ const styles = StyleSheet.create({
   feedbackBtnText: {
     fontSize: 13,
     color: "#1a1a1a",
+    fontWeight: "500",
+  },
+  announceBtn: {
+    backgroundColor: "#f0f4f8",
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderWidth: 2,
+    borderColor: "#1976d2",
+  },
+  announceBtnText: {
+    fontSize: 13,
+    color: "#1976d2",
     fontWeight: "500",
   },
   feedbackTypeRow: {

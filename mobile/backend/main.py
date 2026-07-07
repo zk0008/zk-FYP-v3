@@ -1165,6 +1165,7 @@ def change_password(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    raise HTTPException(status_code=403, detail="Password changes are not permitted. Contact an admin to reset your password.")
     if not verify_password(body.current_password, current_user.password_hash):
         raise HTTPException(status_code=403, detail="Current password is incorrect.")
     if len(body.new_password) < 8:
