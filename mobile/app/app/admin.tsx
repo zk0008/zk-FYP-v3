@@ -109,8 +109,8 @@ export default function Admin() {
 
   const [showImport, setShowImport] = useState(false);
   const [importFile, setImportFile] = useState<{ name: string; uri: string } | null>(null);
-  const [importPreview, setImportPreview] = useState<{ matric_number: string; full_name: string; group_name: string }[]>([]);
-  const [importParsed, setImportParsed] = useState<{ username: string; matric_number: string; full_name: string; email: string; group_name: string; supervisor_email?: string }[]>([]);
+  const [importPreview, setImportPreview] = useState<{ username: string; full_name: string; group_name: string }[]>([]);
+  const [importParsed, setImportParsed] = useState<{ full_name: string; username: string; student_id: string; group_id: string }[]>([]);
   const [importStatus, setImportStatus] = useState<"idle" | "parsing" | "importing" | "done" | "error">("idle");
   const [importError, setImportError] = useState("");
   const [importResult, setImportResult] = useState<{ created: string[]; skipped: string[]; errors: string[] } | null>(null);
@@ -477,21 +477,19 @@ export default function Admin() {
             norm[key.toLowerCase().trim()] = String(row[key] ?? "").trim();
           }
           return {
-            username: norm["username"] ?? "",
-            matric_number: norm["matric_number"] ?? "",
             full_name: norm["full_name"] ?? "",
-            email: norm["email"] ?? "",
-            group_name: norm["group_name"] ?? "",
-            supervisor_email: norm["supervisor_email"] || undefined,
+            username: norm["username"] ?? "",
+            student_id: norm["student_id"] ?? "",
+            group_id: norm["group_id"] ?? "",
           };
         })
-        .filter((r) => r.username && r.matric_number && r.email && r.group_name);
+        .filter((r) => r.full_name && r.username && r.group_id);
       setImportParsed(parsed);
       setImportPreview(
         parsed.slice(0, 5).map((r) => ({
-          matric_number: r.matric_number,
+          username: r.username,
           full_name: r.full_name,
-          group_name: r.group_name,
+          group_name: `Group ${r.group_id}`,
         }))
       );
       setImportStatus("idle");
@@ -827,8 +825,8 @@ export default function Admin() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Import Students</Text>
             <Text style={styles.importInstructions}>
-              Select an Excel file (.xlsx) with columns: matric_number, full_name, email, group_name, supervisor_email (optional).
-              Password will be set to the last 4 characters of the matric number.
+              Select an Excel file (.xlsx) with columns: full_name, username, student_id (optional), group_id.
+              A random unusable password is set — students must sign in with Microsoft.
             </Text>
 
             <TouchableOpacity
@@ -849,7 +847,7 @@ export default function Admin() {
                 </Text>
                 {importPreview.map((row, i) => (
                   <View key={i} style={styles.previewRow}>
-                    <Text style={styles.previewMatric}>{row.matric_number}</Text>
+                    <Text style={styles.previewUsername}>{row.username}</Text>
                     <Text style={styles.previewName} numberOfLines={1}>{row.full_name}</Text>
                     <Text style={styles.previewGroup} numberOfLines={1}>{row.group_name}</Text>
                   </View>
@@ -1597,7 +1595,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 3,
   },
-  previewMatric: {
+  previewUsername: {
     fontSize: 12,
     fontWeight: "600",
     color: "#1a1a1a",

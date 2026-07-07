@@ -13,6 +13,7 @@ class User(Base):
     role = Column(String, nullable=False)  # Values: "student", "supervisor", "coordinator", "admin"
     email = Column(String, unique=True, nullable=True)
     full_name = Column(String, nullable=True)
+    student_id = Column(String, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

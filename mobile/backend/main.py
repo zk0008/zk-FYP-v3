@@ -283,6 +283,11 @@ async def startup_event():
             conn.commit()
         except Exception:
             pass
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN student_id TEXT"))
+            conn.commit()
+        except Exception:
+            pass
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS deadlines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -439,12 +444,10 @@ class CreateGroupRequest(BaseModel):
 
 
 class ExcelStudentEntry(BaseModel):
-    username: str
-    matric_number: str
     full_name: str
-    email: str
-    group_name: str
-    supervisor_email: str | None = None
+    username: str
+    student_id: str
+    group_id: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -1117,7 +1120,7 @@ def microsoft_login(body: MicrosoftLoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid Microsoft token.")
 
     # Microsoft tokens put the email in "email" or fall back to "preferred_username"
-    email = payload.get("email") or payload.get("preferred_username", "")
+    email = (payload.get("email") or payload.get("preferred_username", "")).lower().strip()
 
     if not email.lower().endswith("@e.ntu.edu.sg"):
         raise HTTPException(status_code=403, detail="Only NTU accounts are allowed.")
@@ -3316,6 +3319,12 @@ def admin_hard_delete_user(
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
+    # notifications hold non-nullable FKs to both users and messages — must go first
+    db.query(models.Notification).filter(
+        (models.Notification.recipient_id == user_id) | (models.Notification.sender_id == user_id)
+    ).delete(synchronize_session=False)
+    db.query(models.GroupMember).filter(models.GroupMember.user_id == user_id).delete()
+    db.query(models.PushToken).filter(models.PushToken.user_id == user_id).delete()
     db.delete(user)
     db.commit()
     return {"message": "User permanently deleted."}
@@ -3510,7 +3519,9 @@ def admin_import_students(
     skipped = []
     errors = []
     for entry in body:
-        username = entry.username
+        username = entry.username.lower().strip()
+        email = f"{username}@e.ntu.edu.sg"
+        group_name = f"Group {entry.group_id}"
         existing = db.query(models.User).filter(models.User.username == username).first()
         if existing:
             if existing.is_active:
@@ -3519,31 +3530,32 @@ def admin_import_students(
             # reactivate an inactive account and refresh their details
             existing.is_active = True
             existing.full_name = entry.full_name
-            existing.email = entry.email
+            existing.email = email
+            if entry.student_id:
+                existing.student_id = entry.student_id
             user = existing
         else:
             # Skip if email is already taken by a different active account
-            if db.query(models.User).filter(models.User.email == entry.email).first():
+            if db.query(models.User).filter(models.User.email == email).first():
                 skipped.append(username)
                 continue
-            # last 4 chars of the matric number as the temporary password
-            temp_password = entry.matric_number[-4:]
             user = models.User(
                 username=username,
-                password_hash=hash_password(temp_password),
+                password_hash=hash_password(str(uuid.uuid4())),
                 role="student",
-                email=entry.email,
+                email=email,
                 full_name=entry.full_name,
+                student_id=entry.student_id if entry.student_id else None,
             )
             db.add(user)
             db.flush()
         # case-insensitive group lookup — create the group if it doesn't exist yet
         group = db.query(models.Group).filter(
-            models.Group.name.ilike(entry.group_name)
+            models.Group.name.ilike(group_name)
         ).first()
         if not group:
-            string_id = entry.group_name.lower().replace(" ", "-")
-            group = models.Group(name=entry.group_name, string_id=string_id)
+            string_id = group_name.lower().replace(" ", "-")
+            group = models.Group(name=group_name, string_id=string_id)
             db.add(group)
             db.flush()
         # link student to group
@@ -3553,19 +3565,6 @@ def admin_import_students(
         ).first()
         if not already:
             db.add(models.GroupMember(user_id=user.id, group_id=group.id))
-        # if a supervisor email was provided, add them to the group too
-        if entry.supervisor_email:
-            supervisor = db.query(models.User).filter(
-                models.User.email == entry.supervisor_email,
-                models.User.role == "supervisor",
-            ).first()
-            if supervisor:
-                sup_already = db.query(models.GroupMember).filter(
-                    models.GroupMember.user_id == supervisor.id,
-                    models.GroupMember.group_id == group.id,
-                ).first()
-                if not sup_already:
-                    db.add(models.GroupMember(user_id=supervisor.id, group_id=group.id))
         created.append(username)
     db.commit()
     return {"created": created, "skipped": skipped, "errors": errors}
