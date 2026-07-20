@@ -126,6 +126,12 @@ Estimated cost:
 
 This decision was made after comparing against Render (Paid, $7/month) and Railway (Hobby, $5/month), which do not require the PostgreSQL/pgvector migration since their persistent disks support SQLite natively. Azure was chosen specifically to consolidate all spending under one account alongside the existing Microsoft authentication setup.
 
+**PostgreSQL and pgvector migration** — ✓ Complete
+- Database migration made dialect-aware (SQLite for local dev, PostgreSQL for Azure production)
+- ChromaDB replaced with pgvector on PostgreSQL, function-for-function parity maintained
+- Verified end-to-end: document upload, chunking, embedding, retrieval, and @ai responses tested against real Azure PostgreSQL database
+- Local SQLite/ChromaDB path confirmed unaffected
+
 ---
 
 ## Phase 5 — Pre and Post Survey

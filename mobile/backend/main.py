@@ -218,6 +218,11 @@ def migrate_student_summaries():
 @app.on_event("startup")
 async def startup_event():
     """Run initialization tasks when the app starts."""
+    # pgvector extension must exist before create_all() tries to create the chunks table
+    if engine.dialect.name == "postgresql":
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
     # Create all database tables
     Base.metadata.create_all(bind=engine)
     # Add any columns that were added after the DB was first created.
@@ -250,6 +255,9 @@ async def startup_event():
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true"))
             conn.commit()
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS student_id TEXT"))
+            conn.commit()
+            # chunks table was just created by create_all() above — build the HNSW index now
+            conn.execute(text("CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops)"))
             conn.commit()
         else:
             try:

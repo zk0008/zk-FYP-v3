@@ -32,3 +32,4 @@ tavily-python
 chromadb
 sentence-transformers
 requests
+pgvector
