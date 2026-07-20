@@ -144,6 +144,11 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Green dot for production (Azure), yellow dot for local development
 - Implemented once at the root layout level, no changes needed to individual screens
 
+**Full-screen image viewer** — ✓ Complete
+- Tap any chat image to view it full-screen
+- Tap anywhere to close, or use the close button
+- Note: pinch-to-zoom was attempted via react-native-gesture-handler but caused a crash in Expo Go ("Exception in HostFunction" at import time) — reverted to a simpler tap-to-view modal using only React Native core components, no gesture library
+
 ---
 
 ## Phase 5 — Pre and Post Survey

@@ -1,5 +1,6 @@
-import { memo } from "react";
-import { View, Text, Image, StyleSheet } from "react-native";
+import { memo, useState } from "react";
+import { View, Text, Image, StyleSheet, TouchableOpacity } from "react-native";
+import ImageViewerModal from "./ImageViewerModal";
 
 type Props = {
   sender: string;
@@ -72,18 +73,26 @@ function renderPlainText(text: string) {
 export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp, message_type, image_url }: Props) {
   const timeLabel = formatSGT(timestamp);
   const isImage = message_type === "image" && !!image_url;
+  const [showFullImage, setShowFullImage] = useState(false);
 
   if (isOwn) {
     return (
       <View style={styles.rowRight}>
         {isImage ? (
-          <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOwn]} />
+          <TouchableOpacity onPress={() => setShowFullImage(true)} activeOpacity={0.9}>
+            <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOwn]} />
+          </TouchableOpacity>
         ) : (
           <View style={[styles.bubble, styles.ownBubble]}>
             <Text style={styles.ownText}>{text}</Text>
           </View>
         )}
         <Text style={styles.timestamp}>{timeLabel}</Text>
+        <ImageViewerModal
+          visible={showFullImage}
+          imageUrl={image_url ?? null}
+          onClose={() => setShowFullImage(false)}
+        />
       </View>
     );
   }
@@ -104,13 +113,20 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
     <View style={styles.rowLeft}>
       <Text style={styles.senderLabel}>{sender}</Text>
       {isImage ? (
-        <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOther]} />
+        <TouchableOpacity onPress={() => setShowFullImage(true)} activeOpacity={0.9}>
+          <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOther]} />
+        </TouchableOpacity>
       ) : (
         <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
           <Text style={styles.otherText}>{text}</Text>
         </View>
       )}
       <Text style={styles.timestamp}>{timeLabel}</Text>
+      <ImageViewerModal
+        visible={showFullImage}
+        imageUrl={image_url ?? null}
+        onClose={() => setShowFullImage(false)}
+      />
     </View>
   );
 });
