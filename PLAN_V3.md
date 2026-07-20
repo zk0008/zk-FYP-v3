@@ -139,6 +139,11 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Verified end-to-end on both local disk and Azure Blob Storage: upload, download, delete, image display, AI summary with images
 - Note: HEIC images (default iPhone camera format) are not yet supported — deferred, frontend conversion or backend decoding needed in future
 
+**Environment indicator** — ✓ Complete
+- Small dot indicator visible on all screens showing which backend the app is connected to
+- Green dot for production (Azure), yellow dot for local development
+- Implemented once at the root layout level, no changes needed to individual screens
+
 ---
 
 ## Phase 5 — Pre and Post Survey
