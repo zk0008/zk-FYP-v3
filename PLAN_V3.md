@@ -85,6 +85,9 @@ components for the final submission.
 - iOS and Android builds via Expo
 - APK (Android) and IPA (iOS) for distribution
 
+**Distribution method (confirmed)**
+- iOS via Expo Go (bypasses Apple Developer cost, push notifications and date pickers confirmed working on real device), Android via standalone APK build
+
 **Web version**
 - Web version of the application
 
