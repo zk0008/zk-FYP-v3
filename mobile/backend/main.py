@@ -223,109 +223,181 @@ async def startup_event():
     # Add any columns that were added after the DB was first created.
     # SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so wrap in try/except.
     with engine.connect() as conn:
-        try:
-            conn.execute(text("ALTER TABLE group_members ADD COLUMN last_read_message_id INTEGER"))
+        is_postgres = engine.dialect.name == "postgresql"
+        if is_postgres:
+            conn.execute(text("ALTER TABLE group_members ADD COLUMN IF NOT EXISTS last_read_message_id INTEGER"))
             conn.commit()
-        except Exception:
-            pass  # column already exists — safe to ignore
-        try:
-            conn.execute(text("ALTER TABLE messages ADD COLUMN message_type VARCHAR DEFAULT 'text' NOT NULL"))
+            conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_type VARCHAR NOT NULL DEFAULT 'text'"))
             conn.commit()
-        except Exception:
-            pass  # column already exists — safe to ignore
-        try:
-            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN ai_summary_copy TEXT"))
+            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN IF NOT EXISTS ai_summary_copy TEXT"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN is_submitted BOOLEAN NOT NULL DEFAULT 0"))
+            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN IF NOT EXISTS is_submitted BOOLEAN NOT NULL DEFAULT false"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN submitted_at DATETIME"))
+            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN is_late BOOLEAN NOT NULL DEFAULT 0"))
+            conn.execute(text("ALTER TABLE student_summaries ADD COLUMN IF NOT EXISTS is_late BOOLEAN NOT NULL DEFAULT false"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE deadlines ADD COLUMN start_dt DATETIME"))
+            conn.execute(text("ALTER TABLE deadlines ADD COLUMN IF NOT EXISTS start_dt TIMESTAMP"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE deadlines ADD COLUMN frequency VARCHAR NOT NULL DEFAULT 'once'"))
+            conn.execute(text("ALTER TABLE deadlines ADD COLUMN IF NOT EXISTS frequency VARCHAR NOT NULL DEFAULT 'once'"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE deadlines ADD COLUMN is_hard BOOLEAN NOT NULL DEFAULT 0"))
+            conn.execute(text("ALTER TABLE deadlines ADD COLUMN IF NOT EXISTS is_hard BOOLEAN NOT NULL DEFAULT false"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE users ADD COLUMN email TEXT UNIQUE"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT UNIQUE"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE users ADD COLUMN full_name TEXT"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true"))
             conn.commit()
-        except Exception:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE users ADD COLUMN student_id TEXT"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS student_id TEXT"))
             conn.commit()
-        except Exception:
-            pass
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS deadlines (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                deadline_dt DATETIME NOT NULL,
-                set_by_user_id INTEGER REFERENCES users(id),
-                created_at DATETIME NOT NULL DEFAULT (datetime('now'))
-            )
-        """))
+        else:
+            try:
+                conn.execute(text("ALTER TABLE group_members ADD COLUMN last_read_message_id INTEGER"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists — safe to ignore
+            try:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN message_type VARCHAR DEFAULT 'text' NOT NULL"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists — safe to ignore
+            try:
+                conn.execute(text("ALTER TABLE student_summaries ADD COLUMN ai_summary_copy TEXT"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE student_summaries ADD COLUMN is_submitted BOOLEAN NOT NULL DEFAULT 0"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE student_summaries ADD COLUMN submitted_at DATETIME"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE student_summaries ADD COLUMN is_late BOOLEAN NOT NULL DEFAULT 0"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE deadlines ADD COLUMN start_dt DATETIME"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE deadlines ADD COLUMN frequency VARCHAR NOT NULL DEFAULT 'once'"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE deadlines ADD COLUMN is_hard BOOLEAN NOT NULL DEFAULT 0"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN email TEXT UNIQUE"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN full_name TEXT"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN student_id TEXT"))
+                conn.commit()
+            except Exception:
+                pass
+        if is_postgres:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS deadlines (
+                    id SERIAL PRIMARY KEY,
+                    deadline_dt TIMESTAMP NOT NULL,
+                    set_by_user_id INTEGER REFERENCES users(id),
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS deadlines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    deadline_dt DATETIME NOT NULL,
+                    set_by_user_id INTEGER REFERENCES users(id),
+                    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+                )
+            """))
         conn.commit()
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS course_periods (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                start_date DATE NOT NULL,
-                end_date DATE NOT NULL,
-                set_by_user_id INTEGER REFERENCES users(id),
-                created_at DATETIME NOT NULL DEFAULT (datetime('now'))
-            )
-        """))
+        if is_postgres:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS course_periods (
+                    id SERIAL PRIMARY KEY,
+                    start_date DATE NOT NULL,
+                    end_date DATE NOT NULL,
+                    set_by_user_id INTEGER REFERENCES users(id),
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS course_periods (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    start_date DATE NOT NULL,
+                    end_date DATE NOT NULL,
+                    set_by_user_id INTEGER REFERENCES users(id),
+                    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+                )
+            """))
         conn.commit()
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS broadcasts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content TEXT NOT NULL,
-                sent_by_user_id INTEGER REFERENCES users(id),
-                created_at DATETIME NOT NULL DEFAULT (datetime('now'))
-            )
-        """))
+        if is_postgres:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS broadcasts (
+                    id SERIAL PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    sent_by_user_id INTEGER REFERENCES users(id),
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS broadcasts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    sent_by_user_id INTEGER REFERENCES users(id),
+                    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+                )
+            """))
         conn.commit()
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content TEXT NOT NULL,
-                feedback_type TEXT NOT NULL,
-                submitted_by_user_id INTEGER REFERENCES users(id),
-                is_resolved INTEGER NOT NULL DEFAULT 0,
-                created_at DATETIME NOT NULL DEFAULT (datetime('now'))
-            )
-        """))
+        if is_postgres:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id SERIAL PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    feedback_type TEXT NOT NULL,
+                    submitted_by_user_id INTEGER REFERENCES users(id),
+                    is_resolved BOOLEAN NOT NULL DEFAULT false,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    feedback_type TEXT NOT NULL,
+                    submitted_by_user_id INTEGER REFERENCES users(id),
+                    is_resolved INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+                )
+            """))
         conn.commit()
     # Copy any existing Group.student_summary text into the new student_summaries table
     migrate_student_summaries()
