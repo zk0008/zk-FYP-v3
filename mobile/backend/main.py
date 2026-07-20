@@ -1,4 +1,5 @@
 import os
+import io
 import re
 import json
 import uuid
@@ -10,7 +11,7 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Depends, Header, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from openai import OpenAI
 from pypdf import PdfReader
@@ -26,6 +27,7 @@ from auth import hash_password, decode_token, verify_password, create_access_tok
 from microsoft_auth import verify_microsoft_token
 from rag import index_document, get_relevant_context, get_top_document, get_top_chunks_for_document, get_chunks_by_filename, list_indexed_filenames
 from websocket_manager import manager
+from blob_storage import is_blob_storage_enabled, upload_blob, download_blob, delete_blob
 
 app = FastAPI(title="Group Chat Prototype")
 
@@ -1515,24 +1517,33 @@ async def upload_image_message(
     if not (is_jpeg or is_png):
         raise HTTPException(status_code=400, detail="File content does not match a valid JPEG or PNG image")
 
-    # save to uploads/images/{group_id}/{timestamp}_{filename}
     # strip any directory components from the client-supplied filename
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_filename = f"{ts}_{os.path.basename(file.filename)}"
-    file_path = IMAGE_STORAGE_DIR / group_id / safe_filename
-    file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        with open(file_path, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        logging.error("Failed to save image: %s", str(e))
-        raise HTTPException(status_code=500, detail="Failed to save image.")
+    if is_blob_storage_enabled():
+        blob_name = f"{group_id}/{safe_filename}"
+        try:
+            upload_blob("images", blob_name, content)
+        except Exception as e:
+            logging.error("Failed to upload image to blob storage: %s", str(e))
+            raise HTTPException(status_code=500, detail="Failed to save image.")
+        stored_content = blob_name
+    else:
+        file_path = IMAGE_STORAGE_DIR / group_id / safe_filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(file_path, "wb") as f:
+                f.write(content)
+        except Exception as e:
+            logging.error("Failed to save image: %s", str(e))
+            raise HTTPException(status_code=500, detail="Failed to save image.")
+        stored_content = str(file_path)
 
     new_message = models.Message(
         group_id=db_group.id,
         user_id=current_user.id,
-        content=str(file_path),
+        content=stored_content,
         is_AI=False,
         message_type="image"
     )
@@ -1606,18 +1617,25 @@ def get_image_message(
     if not msg:
         raise HTTPException(status_code=404, detail="Image message not found")
 
-    # resolve() collapses any .. or symlinks so is_relative_to() can't be tricked
-    file_path = Path(msg.content).resolve()
-    if not file_path.is_relative_to(IMAGE_STORAGE_DIR.resolve()):
-        raise HTTPException(status_code=404, detail="Image file not found on disk")
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Image file not found on disk")
+    if is_blob_storage_enabled():
+        try:
+            data = download_blob("images", msg.content)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Image file not found in blob storage")
+        ext = os.path.splitext(msg.content)[1].lower()
+        mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+        return Response(content=data, media_type=mime)
+    else:
+        # resolve() collapses any .. or symlinks so is_relative_to() can't be tricked
+        file_path = Path(msg.content).resolve()
+        if not file_path.is_relative_to(IMAGE_STORAGE_DIR.resolve()):
+            raise HTTPException(status_code=404, detail="Image file not found on disk")
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Image file not found on disk")
 
-    # pick the right MIME type from the extension
-    ext = file_path.suffix.lower()
-    mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
-
-    return FileResponse(path=file_path, media_type=mime)
+        ext = file_path.suffix.lower()
+        mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+        return FileResponse(path=file_path, media_type=mime)
 
 
 @app.get("/groups/{group_id}/documents")
@@ -1698,10 +1716,6 @@ async def upload_document(
     # strip any directory components from the client-supplied filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_filename = f"{timestamp}_{os.path.basename(file.filename)}"
-    file_path = PDF_STORAGE_DIR / group_id / safe_filename
-    
-    # Create group-specific directory
-    file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Read content first so we can check size before touching disk
     content = await file.read()
@@ -1719,31 +1733,42 @@ async def upload_document(
     if file_ext == ".doc" and not is_doc:
         raise HTTPException(status_code=400, detail="File content does not match a valid DOC file")
 
-    # Save file to disk
-    try:
-        with open(file_path, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        logging.error("Failed to save file: %s", str(e))
-        raise HTTPException(status_code=500, detail="Failed to save file.")
-    
+    if is_blob_storage_enabled():
+        blob_name = f"{group_id}/{safe_filename}"
+        try:
+            upload_blob("documents", blob_name, content)
+        except Exception as e:
+            logging.error("Failed to upload to blob storage: %s", str(e))
+            raise HTTPException(status_code=500, detail="Failed to save file.")
+        stored_path = blob_name
+    else:
+        file_path = PDF_STORAGE_DIR / group_id / safe_filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(file_path, "wb") as f:
+                f.write(content)
+        except Exception as e:
+            logging.error("Failed to save file: %s", str(e))
+            raise HTTPException(status_code=500, detail="Failed to save file.")
+        stored_path = str(file_path)
+
     # Store metadata in database
     document = models.Document(
         group_id=group_id,
         uploaded_by_user_id=current_user.id,
         filename=file.filename,
-        stored_path=str(file_path),
+        stored_path=stored_path,
         created_at=datetime.utcnow()
     )
     db.add(document)
     db.commit()
     db.refresh(document)
 
-    # Index file text into ChromaDB so the RAG pipeline can search it.
+    # read from memory instead of disk so this works for both storage backends
     # .doc is the old binary Word format — python-docx can't read it, so those are stored but not indexed.
     if file_ext == '.pdf':
         try:
-            reader = PdfReader(file_path)
+            reader = PdfReader(io.BytesIO(content))
             pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
             if pdf_text.strip():
                 # Use safe_filename (timestamped) so two uploads of "report.pdf" don't
@@ -1754,17 +1779,16 @@ async def upload_document(
             logging.warning("Failed to index %s for RAG: %s", file.filename, str(e))
     elif file_ext == '.docx':
         try:
-            reader = DocxDocument(file_path)
+            reader = DocxDocument(io.BytesIO(content))
             doc_text = "\n".join(p.text for p in reader.paragraphs if p.text.strip())
             if doc_text.strip():
                 index_document(group_id, safe_filename, doc_text, original_filename=file.filename)
         except Exception as e:
             logging.warning("Failed to index %s for RAG: %s", file.filename, str(e))
-    # .doc files land here — stored on disk, skipped for indexing since python-docx can't parse the old binary format
+    # .doc files land here — stored, skipped for indexing since python-docx can't parse the old binary format
 
-    # Get file size
-    file_size = os.path.getsize(file_path)
-    
+    file_size = len(content)
+
     # Ensure UTC timestamp is marked with 'Z' suffix
     uploaded_at_iso = document.created_at.isoformat()
     if not uploaded_at_iso.endswith('Z'):
@@ -1805,15 +1829,25 @@ def download_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    file_path = Path(document.stored_path)
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk")
-    
-    return FileResponse(
-        path=file_path,
-        filename=document.filename,
-        media_type="application/pdf"
-    )
+    if is_blob_storage_enabled():
+        try:
+            data = download_blob("documents", document.stored_path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found in blob storage")
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{document.filename}"'}
+        )
+    else:
+        file_path = Path(document.stored_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File not found on disk")
+        return FileResponse(
+            path=file_path,
+            filename=document.filename,
+            media_type="application/pdf"
+        )
 
 
 @app.delete("/groups/{group_id}/documents/{document_id}")
@@ -1848,20 +1882,23 @@ def delete_document(
     if not (is_uploader or is_privileged):
         raise HTTPException(status_code=403, detail="Only the uploader, a supervisor, coordinator, or admin can delete this document")
 
-    # Delete the file from file system
-    file_path = Path(document.stored_path).resolve()
-    if not file_path.is_relative_to(PDF_STORAGE_DIR.resolve()):
-        logging.warning("Skipping deletion of file outside storage directory: %s", file_path)
-    elif file_path.exists():
-        try:
-            file_path.unlink()
-        except Exception as e:
-            logging.error("Error deleting file %s: %s", file_path, str(e))
-    
+    if is_blob_storage_enabled():
+        delete_blob("documents", document.stored_path)
+    else:
+        # Path-traversal guard — make sure stored_path is still inside our uploads dir
+        file_path = Path(document.stored_path).resolve()
+        if not file_path.is_relative_to(PDF_STORAGE_DIR.resolve()):
+            logging.warning("Skipping deletion of file outside storage directory: %s", file_path)
+        elif file_path.exists():
+            try:
+                file_path.unlink()
+            except Exception as e:
+                logging.error("Error deleting file %s: %s", file_path, str(e))
+
     # Delete the document from database
     db.delete(document)
     db.commit()
-    
+
     return {"message": "Document deleted successfully"}
 
 
@@ -2007,25 +2044,35 @@ def generate_summary(
             # mark where the image appeared in the conversation
             transcript_lines.append(f"[{timestamp_str}] {username}: [sent an image]")
 
-            # only read files that live inside this group's image folder
-            # resolve() collapses any .. so a crafted DB value can't escape the group dir
-            file_path = Path(msg.content).resolve()
-            if not file_path.is_relative_to((IMAGE_STORAGE_DIR / group_id).resolve()):
-                logging.warning("Skipping image outside group directory: %s", msg.content)
-                continue
+            if is_blob_storage_enabled():
+                try:
+                    img_bytes = download_blob("images", msg.content)
+                    ext = os.path.splitext(msg.content)[1].lower()
+                    mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+                    b64 = base64.b64encode(img_bytes).decode("utf-8")
+                    image_blocks.append({"mime": mime, "data": b64})
+                except Exception as e:
+                    logging.warning("Could not read image %s: %s", msg.content, str(e))
+            else:
+                # only read files that live inside this group's image folder
+                # resolve() collapses any .. so a crafted DB value can't escape the group dir
+                file_path = Path(msg.content).resolve()
+                if not file_path.is_relative_to((IMAGE_STORAGE_DIR / group_id).resolve()):
+                    logging.warning("Skipping image outside group directory: %s", msg.content)
+                    continue
 
-            if not file_path.exists():
-                logging.warning("Skipping missing image file: %s", msg.content)
-                continue
+                if not file_path.exists():
+                    logging.warning("Skipping missing image file: %s", msg.content)
+                    continue
 
-            try:
-                ext = file_path.suffix.lower()
-                mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
-                with open(file_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("utf-8")
-                image_blocks.append({"mime": mime, "data": b64})
-            except Exception as e:
-                logging.warning("Could not read image %s: %s", msg.content, str(e))
+                try:
+                    ext = file_path.suffix.lower()
+                    mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+                    with open(file_path, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("utf-8")
+                    image_blocks.append({"mime": mime, "data": b64})
+                except Exception as e:
+                    logging.warning("Could not read image %s: %s", msg.content, str(e))
         else:
             transcript_lines.append(f"[{timestamp_str}] {username}: {msg.content}")
 

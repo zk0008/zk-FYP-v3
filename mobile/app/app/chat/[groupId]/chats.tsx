@@ -253,11 +253,19 @@ export default function Chats() {
     const formData = new FormData();
     formData.append("file", { uri, name: filename, type: mimeType } as any);
     try {
-      await fetch(`${API_BASE}/groups/${groupId}/messages/image`, {
+      const response = await fetch(`${API_BASE}/groups/${groupId}/messages/image`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
+      if (!response.ok) {
+        let detail = "Could not upload the image.";
+        try {
+          const body = await response.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {}
+        Alert.alert("Upload failed", detail);
+      }
     } catch {
       Alert.alert("Upload failed", "Could not send the image. Please try again.");
     }

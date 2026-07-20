@@ -132,6 +132,13 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Verified end-to-end: document upload, chunking, embedding, retrieval, and @ai responses tested against real Azure PostgreSQL database
 - Local SQLite/ChromaDB path confirmed unaffected
 
+**Azure Blob Storage migration** — ✓ Complete
+- Document and image uploads made storage-aware (local disk for dev, Blob Storage for Azure production)
+- RAG text extraction and vision summary reads now use in-memory content instead of re-reading from disk
+- Fixed silent failure on image upload errors — frontend now surfaces backend validation messages to the user
+- Verified end-to-end on both local disk and Azure Blob Storage: upload, download, delete, image display, AI summary with images
+- Note: HEIC images (default iPhone camera format) are not yet supported — deferred, frontend conversion or backend decoding needed in future
+
 ---
 
 ## Phase 5 — Pre and Post Survey
