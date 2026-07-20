@@ -136,6 +136,65 @@ Set `SKIP_DEMO_DATA=true` in `.env` to disable this seeding — recommended for 
 
 ---
 
+## Running Locally vs Production
+
+### Local Development
+
+Backend (SQLite + local disk storage):
+```bash
+cd mobile/backend
+source .venv/bin/activate
+unset ALL_PROXY HTTPS_PROXY HTTP_PROXY
+uvicorn main:app --reload --port 8001 --host 0.0.0.0
+```
+
+Confirm `mobile/backend/.env` does NOT contain `DATABASE_URL` pointing to PostgreSQL, and does NOT contain `AZURE_STORAGE_CONNECTION_STRING` — their absence is what activates local SQLite and local disk storage.
+
+Mobile app:
+```bash
+cd mobile/app
+npx expo start --clear
+```
+
+Update `mobile/app/.env` with your current LAN IP:
+```
+EXPO_PUBLIC_API_URL=http://<your-lan-ip>:8001
+EXPO_PUBLIC_WS_URL=ws://<your-lan-ip>:8001
+```
+
+### Production (Azure)
+
+Production runs automatically — no manual commands needed. Deployment happens via GitHub Actions whenever `prod` branch is updated:
+
+```bash
+git checkout prod
+git merge main
+git push origin prod
+```
+
+This triggers Azure App Service to pull the latest code, install dependencies, and restart automatically. Environment variables (`DATABASE_URL`, `AZURE_STORAGE_CONNECTION_STRING`, `JWT_SECRET_KEY`, etc.) are already configured in Azure App Service → Environment variables → App settings, and do not need to be set locally.
+
+To view production logs: Azure Portal → App Service (`collab-gpt-backend`) → Log stream.
+
+### Testing Against Production Database Locally (rare, use with caution)
+
+Only needed for debugging production-specific issues. Requires temporarily adding your local IP to the Azure PostgreSQL firewall allowlist first (Azure Portal → PostgreSQL server → Networking → Firewall rules).
+
+```bash
+export DATABASE_URL='your_azure_postgresql_connection_string'
+export AZURE_STORAGE_CONNECTION_STRING='your_azure_blob_connection_string'
+unset ALL_PROXY HTTPS_PROXY HTTP_PROXY
+uvicorn main:app --reload --port 8001 --host 0.0.0.0
+```
+
+**Important — always clean up afterward:**
+```bash
+unset DATABASE_URL AZURE_STORAGE_CONNECTION_STRING
+```
+And remove your IP from the Azure PostgreSQL firewall allowlist once done testing.
+
+---
+
 ## Feature Summary by Version
 
 **V1** — Hybrid three-case RAG pipeline, WebSocket real-time chat, full Expo app (login, groups, chat, documents, AI overview, student overview), summary system with history.
