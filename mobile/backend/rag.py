@@ -3,14 +3,23 @@ from openai import OpenAI
 from database import engine, SessionLocal
 import models
 
-# Load the cross-encoder once at startup.
-# First run downloads ~90MB of model weights, cached locally after that.
-try:
-    from sentence_transformers import CrossEncoder
-    reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-except ImportError:
-    reranker = None
-    print("WARNING: sentence-transformers not installed. Reranking disabled.")
+# loading blocks for ~90MB download on cold start, so we defer it to avoid slowing Azure App Service startup
+_reranker = None
+_reranker_checked = False
+
+
+def _get_reranker():
+    global _reranker, _reranker_checked
+    if not _reranker_checked:
+        try:
+            from sentence_transformers import CrossEncoder
+            _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        except ImportError:
+            _reranker = None
+            print("WARNING: sentence-transformers not installed. Reranking disabled.")
+        _reranker_checked = True
+    return _reranker
+
 
 # Separate OpenAI client just for embeddings
 _openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -156,6 +165,7 @@ def get_relevant_context(group_id, query, top_k=80, top_n=10):
                 return [], -999.0
 
             # Cross-encoder reranks the vector-search candidates — same logic as ChromaDB path
+            reranker = _get_reranker()
             if reranker:
                 pairs = [(query, row.chunk_text) for row in candidates]
                 scores = reranker.predict(pairs).tolist()
@@ -217,6 +227,7 @@ def get_relevant_context(group_id, query, top_k=80, top_n=10):
         candidate_metas = [item[1] for item in filtered]
 
         # Cross-encoder scores each (query, passage) pair — much more precise than cosine distance
+        reranker = _get_reranker()
         if reranker:
             pairs = [(query, text) for text in candidate_texts]
             scores = reranker.predict(pairs).tolist()
@@ -284,6 +295,7 @@ def get_top_chunks_for_document(group_id, query, filename, top_n=5):
             if not rows:
                 return []
             texts = [row.chunk_text for row in rows]
+            reranker = _get_reranker()
             if reranker:
                 pairs = [(query, text) for text in texts]
                 scores = reranker.predict(pairs).tolist()
@@ -314,6 +326,7 @@ def get_top_chunks_for_document(group_id, query, filename, top_n=5):
         if not texts:
             return []
 
+        reranker = _get_reranker()
         if reranker:
             pairs = [(query, text) for text in texts]
             scores = reranker.predict(pairs).tolist()
