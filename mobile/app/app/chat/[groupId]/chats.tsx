@@ -49,13 +49,14 @@ function dateSeparatorLabel(isoString: string): string {
 }
 
 type Message = {
-  id: number;
+  id: number | string;
   sender: string;
   text: string;
   is_bot: boolean;
   timestamp: string;
   message_type?: string;
   image_url?: string;
+  isThinking?: boolean;
 };
 
 type Member = { username: string; full_name?: string };
@@ -82,11 +83,15 @@ export default function Chats() {
   // true when the user is within 100px of the bottom — controls auto-scroll on new messages
   const isAtBottomRef = useRef(true);
   // Y positions captured by onLayout for each message — keyed by message id
-  const messageYsRef = useRef<{ [id: number]: number }>({});
+  const messageYsRef = useRef<Record<string, number>>({});
   // id of the first unread message to jump to on load, or null = jump to end
   const firstUnreadIdRef = useRef<number | null>(null);
   // skip /read in useFocusEffect on the very first focus — load effect handles it instead
   const isFirstFocusRef = useRef(true);
+  // holds the 60-second safety timer for the thinking bubble — cleared when the real reply arrives
+  const thinkingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // true between send() and the user's own WS echo arriving — tells onMessage to insert the thinking bubble
+  const pendingAiMessageRef = useRef(false);
 
   // When the keyboard slides up, scroll to the bottom so the latest message stays visible
   useEffect(() => {
@@ -211,11 +216,53 @@ export default function Chats() {
     groupId,
     token: token ?? "",
     onMessage: useCallback((msg) => {
+      if (msg.is_bot && thinkingTimeoutRef.current) {
+        clearTimeout(thinkingTimeoutRef.current);
+        thinkingTimeoutRef.current = null;
+      }
+
+      // needs to be outside the updater so the timeout below can capture it
+      let tempId: string | null = null;
+      if (!msg.is_bot && pendingAiMessageRef.current) {
+        pendingAiMessageRef.current = false;
+        tempId = `temp-ai-${Date.now()}`;
+      }
+
       setMessages((prev) => {
         // same message can arrive twice if the socket reconnects mid-broadcast — skip it
         if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, msg];
+        if (tempId !== null) {
+          // user's own @ai echo arrived — append it then immediately append the thinking bubble
+          return [...prev, msg, {
+            id: tempId,
+            sender: "AI Bot",
+            text: "",
+            is_bot: true,
+            isThinking: true,
+            timestamp: new Date().toISOString(),
+          }];
+        }
+        // real bot reply arriving — drop the thinking bubble before appending
+        const withoutThinking = msg.is_bot
+          ? prev.filter((m) => !m.isThinking)
+          : prev;
+        return [...withoutThinking, msg];
       });
+
+      if (tempId !== null) {
+        if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
+        thinkingTimeoutRef.current = setTimeout(() => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempId
+                ? { ...m, isThinking: false, text: "AI is taking longer than expected..." }
+                : m
+            )
+          );
+          thinkingTimeoutRef.current = null;
+        }, 60000);
+      }
+
       // only auto-scroll if the user is already near the bottom
       if (isAtBottomRef.current) {
         setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50);
@@ -240,6 +287,7 @@ export default function Chats() {
   const handleSend = () => {
     const text = inputText.trim();
     if (!text || !isConnected) return;
+    pendingAiMessageRef.current = text.toLowerCase().includes("@ai");
     send(text);
     setInputText("");
     // keyboard shrinks the viewport which can flip isAtBottomRef; reset so the WS echo scrolls
@@ -414,6 +462,7 @@ export default function Chats() {
                       isTagged={isTagged}
                       timestamp={msg.timestamp}
                       message_type={msg.message_type}
+                      isThinking={msg.isThinking}
                       image_url={
                         msg.image_url
                           ? // Token goes in the query string because React Native's Image

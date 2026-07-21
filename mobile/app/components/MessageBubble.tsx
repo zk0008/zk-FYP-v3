@@ -1,5 +1,5 @@
-import { memo, useState } from "react";
-import { View, Text, Image, StyleSheet, TouchableOpacity } from "react-native";
+import { memo, useState, useRef, useEffect } from "react";
+import { View, Text, Image, StyleSheet, TouchableOpacity, Animated } from "react-native";
 import ImageViewerModal from "./ImageViewerModal";
 
 type Props = {
@@ -11,6 +11,7 @@ type Props = {
   timestamp: string;
   message_type?: string;
   image_url?: string; // fully-constructed authenticated URI, built by chats.tsx
+  isThinking?: boolean;
 };
 
 // Append Z if the ISO string has no timezone suffix so Date treats it as UTC, not local time.
@@ -69,8 +70,43 @@ function renderPlainText(text: string) {
   });
 }
 
+function ThinkingDots() {
+  const dot1 = useRef(new Animated.Value(0.3)).current;
+  const dot2 = useRef(new Animated.Value(0.3)).current;
+  const dot3 = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    const anim = Animated.loop(
+      Animated.stagger(200, [
+        Animated.sequence([
+          Animated.timing(dot1, { toValue: 1, duration: 400, useNativeDriver: true }),
+          Animated.timing(dot1, { toValue: 0.3, duration: 400, useNativeDriver: true }),
+        ]),
+        Animated.sequence([
+          Animated.timing(dot2, { toValue: 1, duration: 400, useNativeDriver: true }),
+          Animated.timing(dot2, { toValue: 0.3, duration: 400, useNativeDriver: true }),
+        ]),
+        Animated.sequence([
+          Animated.timing(dot3, { toValue: 1, duration: 400, useNativeDriver: true }),
+          Animated.timing(dot3, { toValue: 0.3, duration: 400, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
+  }, []);
+
+  return (
+    <View style={{ flexDirection: "row", gap: 4, paddingVertical: 4 }}>
+      <Animated.View style={[styles.thinkingDot, { opacity: dot1 }]} />
+      <Animated.View style={[styles.thinkingDot, { opacity: dot2 }]} />
+      <Animated.View style={[styles.thinkingDot, { opacity: dot3 }]} />
+    </View>
+  );
+}
+
 // memo prevents re-renders when the parent ScrollView re-renders for unrelated reasons
-export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp, message_type, image_url }: Props) {
+export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp, message_type, image_url, isThinking }: Props) {
   const timeLabel = formatSGT(timestamp);
   const isImage = message_type === "image" && !!image_url;
   const [showFullImage, setShowFullImage] = useState(false);
@@ -102,9 +138,12 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
       <View style={styles.rowLeft}>
         <Text style={styles.senderLabel}>AI Bot</Text>
         <View style={[styles.bubble, styles.botBubble]}>
-          <Text style={styles.otherText}>{renderPlainText(text)}</Text>
+          {isThinking
+            ? <ThinkingDots />
+            : <Text style={styles.otherText}>{renderPlainText(text)}</Text>
+          }
         </View>
-        <Text style={styles.timestamp}>{timeLabel}</Text>
+        {!isThinking && <Text style={styles.timestamp}>{timeLabel}</Text>}
       </View>
     );
   }
@@ -216,5 +255,11 @@ const styles = StyleSheet.create({
   imageThumbnailOther: {
     // matches otherBubble — slightly flattened bottom-left corner
     borderBottomLeftRadius: 4,
+  },
+  thinkingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#7e57c2",
   },
 });

@@ -21,6 +21,11 @@ def _get_reranker():
     return _reranker
 
 
+def warm_reranker():
+    # called from startup in a background thread so the model is ready before the first @ai query
+    _get_reranker()
+
+
 # Separate OpenAI client just for embeddings
 _openai_api_key = os.getenv("OPENAI_API_KEY")
 _embed_client = OpenAI(api_key=_openai_api_key) if _openai_api_key else None
