@@ -25,7 +25,7 @@ from database import Base, SessionLocal, get_db, engine
 import models  # Import models so Alembic can see them
 from auth import hash_password, decode_token, verify_password, create_access_token
 from microsoft_auth import verify_microsoft_token
-from rag import index_document, get_relevant_context, get_top_document, get_top_chunks_for_document, get_chunks_by_filename, list_indexed_filenames
+from rag import index_document, get_relevant_context, get_top_document, get_top_chunks_for_document, get_chunks_by_filename, list_indexed_filenames, warm_reranker
 from websocket_manager import manager
 from blob_storage import is_blob_storage_enabled, upload_blob, download_blob, delete_blob
 
@@ -417,6 +417,9 @@ async def startup_event():
     # Only initialize demo data if SKIP_DEMO_DATA is not set (i.e., in local development)
     if not os.getenv("SKIP_DEMO_DATA"):
         init_demo_data()
+    # kick off the reranker model download in the background — startup returns immediately,
+    # model is usually ready well before the first @ai query arrives
+    asyncio.get_running_loop().run_in_executor(None, warm_reranker)
 
 # Initialize OpenAI client with API key from environment variable
 openai_api_key = os.getenv("OPENAI_API_KEY")

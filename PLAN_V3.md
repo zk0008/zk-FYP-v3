@@ -149,6 +149,13 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Tap anywhere to close, or use the close button
 - Note: pinch-to-zoom was attempted via react-native-gesture-handler but caused a crash in Expo Go ("Exception in HostFunction" at import time) — reverted to a simpler tap-to-view modal using only React Native core components, no gesture library
 
+**Azure production fixes and AI thinking indicator** — ✓ Complete
+- Fixed Azure App Service cold-start failure caused by chromadb's unconditional sqlite3 version check (lazy-loaded)
+- Fixed Azure cold-start timeout caused by blocking cross-encoder model download at startup (lazy-loaded, pre-warmed in background on startup)
+- Added AI thinking indicator (animated dots) shown while waiting for @ai response, with 60-second fallback timeout
+- Fixed message ordering so the thinking indicator appears below the user's own @ai message, not above it
+- Confirmed live on Azure App Service: instant login and /docs, first RAG query pre-warmed in background
+
 ---
 
 ## Phase 5 — Pre and Post Survey
