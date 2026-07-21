@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, D
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
+from pgvector.sqlalchemy import Vector
 
 
 class User(Base):
@@ -199,4 +200,16 @@ class Feedback(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     submitted_by = relationship("User")
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_string_id = Column(String, nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    original_filename = Column(String, nullable=True)
+    chunk_index = Column(Integer, nullable=False)
+    chunk_text = Column(Text, nullable=False)
+    embedding = Column(Vector(1536), nullable=False)
 

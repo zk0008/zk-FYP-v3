@@ -32,3 +32,5 @@ tavily-python
 chromadb
 sentence-transformers
 requests
+pgvector
+azure-storage-blob
