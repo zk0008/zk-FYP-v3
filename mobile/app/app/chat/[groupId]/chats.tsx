@@ -11,6 +11,8 @@ import {
   Platform,
   StyleSheet,
   Alert,
+  Modal,
+  Image,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useGlobalSearchParams, useFocusEffect } from "expo-router";
@@ -78,6 +80,9 @@ export default function Chats() {
   // hidden until the initial scroll completes so the user doesn't see the list jump
   const [isScrollReady, setIsScrollReady] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [pendingImage, setPendingImage] = useState<{ uri: string; filename: string; mimeType: string } | null>(null);
+  const [showImagePreview, setShowImagePreview] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
   // true when the user is within 100px of the bottom — controls auto-scroll on new messages
@@ -343,7 +348,8 @@ export default function Chats() {
           }
           const ext = asset.mimeType === "image/png" ? ".png" : ".jpg";
           const filename = asset.fileName ?? `photo${ext}`;
-          await handleImageUpload(asset.uri, filename, asset.mimeType ?? "image/jpeg");
+          setPendingImage({ uri: asset.uri, filename, mimeType: asset.mimeType ?? "image/jpeg" });
+          setShowImagePreview(true);
         },
       },
       {
@@ -367,7 +373,8 @@ export default function Chats() {
           }
           const ext = asset.mimeType === "image/png" ? ".png" : ".jpg";
           const filename = asset.fileName ?? `photo${ext}`;
-          await handleImageUpload(asset.uri, filename, asset.mimeType ?? "image/jpeg");
+          setPendingImage({ uri: asset.uri, filename, mimeType: asset.mimeType ?? "image/jpeg" });
+          setShowImagePreview(true);
         },
       },
       { text: "Cancel", style: "cancel" },
@@ -549,6 +556,74 @@ export default function Chats() {
           <Ionicons name="arrow-up" size={22} color="#ffffff" />
         </TouchableOpacity>
       </View>
+
+      {/* Image send confirmation */}
+      <Modal
+        visible={showImagePreview}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!isUploading) {
+            setShowImagePreview(false);
+            setPendingImage(null);
+          }
+        }}
+      >
+        <TouchableOpacity
+          style={styles.previewOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            if (!isUploading) {
+              setShowImagePreview(false);
+              setPendingImage(null);
+            }
+          }}
+        >
+          <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.previewContent}>
+              <Text style={styles.previewTitle}>Send this image?</Text>
+              {pendingImage && (
+                <Image
+                  source={{ uri: pendingImage.uri }}
+                  style={styles.previewImage}
+                  resizeMode="contain"
+                />
+              )}
+              <View style={styles.previewActions}>
+                <TouchableOpacity
+                  style={styles.previewCancelBtn}
+                  onPress={() => {
+                    setShowImagePreview(false);
+                    setPendingImage(null);
+                  }}
+                  disabled={isUploading}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.previewCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.previewSendBtn, isUploading && styles.previewBtnDisabled]}
+                  onPress={async () => {
+                    if (!pendingImage) return;
+                    setIsUploading(true);
+                    await handleImageUpload(pendingImage.uri, pendingImage.filename, pendingImage.mimeType);
+                    setIsUploading(false);
+                    setShowImagePreview(false);
+                    setPendingImage(null);
+                  }}
+                  disabled={isUploading}
+                  activeOpacity={0.8}
+                >
+                  {isUploading
+                    ? <ActivityIndicator size="small" color="#ffffff" />
+                    : <Text style={styles.previewSendText}>Send</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </>
   );
 
@@ -716,5 +791,68 @@ const styles = StyleSheet.create({
     // purple so @ai stands out from regular member names — matches the AI bubble colour
     color: "#7e57c2",
     fontWeight: "600",
+  },
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  previewContent: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    padding: 24,
+  },
+  previewTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  previewImage: {
+    width: 250,
+    height: 250,
+    alignSelf: "center",
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  previewActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 20,
+  },
+  previewCancelBtn: {
+    borderWidth: 1,
+    borderColor: "#1976d2",
+    borderRadius: 10,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+  },
+  previewCancelText: {
+    color: "#1976d2",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  previewSendBtn: {
+    flex: 1,
+    backgroundColor: "#1976d2",
+    borderRadius: 10,
+    paddingVertical: 11,
+    minHeight: 44,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  previewSendText: {
+    color: "#ffffff",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  previewBtnDisabled: {
+    opacity: 0.6,
   },
 });
