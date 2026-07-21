@@ -1,5 +1,4 @@
 import os
-import chromadb
 from openai import OpenAI
 from database import engine, SessionLocal
 import models
@@ -17,8 +16,17 @@ except ImportError:
 _openai_api_key = os.getenv("OPENAI_API_KEY")
 _embed_client = OpenAI(api_key=_openai_api_key) if _openai_api_key else None
 
-# ChromaDB writes to chroma_store/ next to this file, persists across restarts
-_chroma = chromadb.PersistentClient(path="chroma_store")
+# None until first use — deferred so chromadb is never imported on PostgreSQL backends
+# (chromadb checks sqlite3 version at import time, which crashes on Azure's OS-level sqlite3)
+_chroma = None
+
+
+def _get_chroma_client():
+    global _chroma
+    if _chroma is None:
+        import chromadb
+        _chroma = chromadb.PersistentClient(path="chroma_store")
+    return _chroma
 
 
 def is_postgres_backend():
@@ -44,7 +52,7 @@ def chunk_text(text, chunk_size=200, overlap=50):
 
 def _get_collection(group_id):
     # group_id is already "group-a" style — valid as a ChromaDB collection name
-    return _chroma.get_or_create_collection(
+    return _get_chroma_client().get_or_create_collection(
         name=group_id,
         metadata={"hnsw:space": "cosine"}
     )
