@@ -338,7 +338,7 @@ export default function Groups() {
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
             <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
               <View style={styles.settingsContent}>
-                <Text style={styles.settingsTitle}>Send Feedback</Text>
+                <Text style={styles.settingsTitle}>Technical Support</Text>
 
                 <View style={styles.feedbackTypeRow}>
                   {(["general", "bug"] as const).map((t) => (
@@ -502,7 +502,7 @@ export default function Groups() {
 
       <View style={styles.bottomPills}>
         <TouchableOpacity style={styles.feedbackBtn} onPress={openFeedback} activeOpacity={0.8}>
-          <Text style={styles.feedbackBtnText}>Feedback</Text>
+          <Text style={styles.feedbackBtnText}>Technical Support</Text>
         </TouchableOpacity>
         {(user?.role === "coordinator" || user?.role === "admin") && (
           <TouchableOpacity style={styles.announceBtn} onPress={openBroadcasts} activeOpacity={0.8}>

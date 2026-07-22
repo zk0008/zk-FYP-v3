@@ -180,7 +180,7 @@ export default function AiOverview() {
     <View style={styles.container}>
       {/* Header row: title left, history + refresh buttons right */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Weekly Summary</Text>
+        <Text style={styles.headerTitle}>AI Summary</Text>
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={styles.historyBtn}
@@ -260,7 +260,7 @@ export default function AiOverview() {
           {studentSummary ? (
             <View style={styles.prevCard}>
               <View style={styles.prevHeader}>
-                <Text style={styles.prevTitle}>Student Summary</Text>
+                <Text style={styles.prevTitle}>Additional Information</Text>
               </View>
               <Text style={styles.summaryText}>
                 {renderSummaryText(studentSummary)}
