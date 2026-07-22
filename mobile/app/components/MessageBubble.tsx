@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useEffect } from "react";
-import { View, Text, Image, StyleSheet, TouchableOpacity, Animated } from "react-native";
+import { View, Text, Image, StyleSheet, TouchableOpacity, Animated, Linking, Pressable } from "react-native";
 import ImageViewerModal from "./ImageViewerModal";
 
 type Props = {
@@ -12,7 +12,11 @@ type Props = {
   message_type?: string;
   image_url?: string; // fully-constructed authenticated URI, built by chats.tsx
   isThinking?: boolean;
+  is_deleted?: boolean;
+  onLongPress?: () => void;
 };
+
+const URL_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
 
 // Append Z if the ISO string has no timezone suffix so Date treats it as UTC, not local time.
 // Then manually shift to SGT (UTC+8) — avoids Intl timezone support which is patchy in Hermes.
@@ -24,6 +28,24 @@ function formatSGT(isoString: string): string {
   const ampm = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${m} ${ampm}`;
+}
+
+function linkifyText(text: string, linkStyle?: object) {
+  const parts = text.split(URL_REGEX);
+  // split with a capturing group interleaves results: [plain, url, plain, url, ...]
+  // so every odd-indexed entry is a URL match — no need to test each part separately
+  return parts.map((part, i) => {
+    if (!part) return undefined;
+    if (i % 2 === 1) {
+      const href = part.startsWith("www.") ? `https://${part}` : part;
+      return (
+        <Text key={i} style={linkStyle ?? styles.link} onPress={() => Linking.openURL(href)}>
+          {part}
+        </Text>
+      );
+    }
+    return part;
+  });
 }
 
 // Port of web's formatPlainText — handles ### headings, **bold**, leading bullet dashes,
@@ -38,7 +60,7 @@ function renderPlainText(text: string) {
     if (headerMatch) {
       return (
         <Text key={lineIdx}>
-          <Text style={styles.bold}>{headerMatch[1]}</Text>
+          <Text style={styles.bold}>{linkifyText(headerMatch[1])}</Text>
           {sep}
         </Text>
       );
@@ -52,7 +74,7 @@ function renderPlainText(text: string) {
     const hasBold = parts.some((p) => p.startsWith("**") && p.endsWith("**"));
 
     if (!hasBold) {
-      return <Text key={lineIdx}>{bulleted}{sep}</Text>;
+      return <Text key={lineIdx}>{linkifyText(bulleted)}{sep}</Text>;
     }
 
     return (
@@ -61,7 +83,7 @@ function renderPlainText(text: string) {
           part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
             <Text key={pi} style={styles.bold}>{part.slice(2, -2)}</Text>
           ) : (
-            part
+            <Text key={pi}>{linkifyText(part)}</Text>
           )
         )}
         {sep}
@@ -106,7 +128,7 @@ function ThinkingDots() {
 }
 
 // memo prevents re-renders when the parent ScrollView re-renders for unrelated reasons
-export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp, message_type, image_url, isThinking }: Props) {
+export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp, message_type, image_url, isThinking, is_deleted, onLongPress }: Props) {
   const timeLabel = formatSGT(timestamp);
   const isImage = message_type === "image" && !!image_url;
   const [showFullImage, setShowFullImage] = useState(false);
@@ -114,14 +136,24 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
   if (isOwn) {
     return (
       <View style={styles.rowRight}>
-        {isImage ? (
-          <TouchableOpacity onPress={() => setShowFullImage(true)} activeOpacity={0.9}>
+        {is_deleted ? (
+          <View style={[styles.bubble, styles.ownBubble]}>
+            <Text style={styles.deletedText}>This message was deleted</Text>
+          </View>
+        ) : isImage ? (
+          <TouchableOpacity
+            onPress={() => setShowFullImage(true)}
+            onLongPress={isOwn && !is_bot ? onLongPress : undefined}
+            activeOpacity={0.9}
+          >
             <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOwn]} />
           </TouchableOpacity>
         ) : (
-          <View style={[styles.bubble, styles.ownBubble]}>
-            <Text style={styles.ownText}>{text}</Text>
-          </View>
+          <Pressable onLongPress={isOwn && !is_bot ? onLongPress : undefined}>
+            <View style={[styles.bubble, styles.ownBubble]}>
+              <Text style={styles.ownText}>{linkifyText(text, styles.linkOwn)}</Text>
+            </View>
+          </Pressable>
         )}
         <Text style={styles.timestamp}>{timeLabel}</Text>
         <ImageViewerModal
@@ -138,7 +170,9 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
       <View style={styles.rowLeft}>
         <Text style={styles.senderLabel}>AI Bot</Text>
         <View style={[styles.bubble, styles.botBubble]}>
-          {isThinking
+          {is_deleted
+            ? <Text style={styles.deletedText}>This message was deleted</Text>
+            : isThinking
             ? <ThinkingDots />
             : <Text style={styles.otherText}>{renderPlainText(text)}</Text>
           }
@@ -151,14 +185,24 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
   return (
     <View style={styles.rowLeft}>
       <Text style={styles.senderLabel}>{sender}</Text>
-      {isImage ? (
-        <TouchableOpacity onPress={() => setShowFullImage(true)} activeOpacity={0.9}>
+      {is_deleted ? (
+        <View style={[styles.bubble, styles.otherBubble]}>
+          <Text style={styles.deletedText}>This message was deleted</Text>
+        </View>
+      ) : isImage ? (
+        <TouchableOpacity
+          onPress={() => setShowFullImage(true)}
+          onLongPress={isOwn && !is_bot ? onLongPress : undefined}
+          activeOpacity={0.9}
+        >
           <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOther]} />
         </TouchableOpacity>
       ) : (
-        <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
-          <Text style={styles.otherText}>{text}</Text>
-        </View>
+        <Pressable onLongPress={isOwn && !is_bot ? onLongPress : undefined}>
+          <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
+            <Text style={styles.otherText}>{linkifyText(text)}</Text>
+          </View>
+        </Pressable>
       )}
       <Text style={styles.timestamp}>{timeLabel}</Text>
       <ImageViewerModal
@@ -261,5 +305,20 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: "#7e57c2",
+  },
+  deletedText: {
+    color: "#9e9e9e",
+    fontSize: 15,
+    fontStyle: "italic",
+    lineHeight: 20,
+  },
+  link: {
+    color: "#1565c0",
+    textDecorationLine: "underline",
+  },
+  // own bubble is already blue, so use white underlined instead of dark blue
+  linkOwn: {
+    color: "#ffffff",
+    textDecorationLine: "underline",
   },
 });

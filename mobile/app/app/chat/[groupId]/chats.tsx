@@ -13,6 +13,7 @@ import {
   Alert,
   Modal,
   Image,
+  Pressable,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useGlobalSearchParams, useFocusEffect } from "expo-router";
@@ -53,12 +54,13 @@ function dateSeparatorLabel(isoString: string): string {
 type Message = {
   id: number | string;
   sender: string;
-  text: string;
+  text: string | null;
   is_bot: boolean;
   timestamp: string;
   message_type?: string;
   image_url?: string;
   isThinking?: boolean;
+  is_deleted?: boolean;
 };
 
 type Member = { username: string; full_name?: string };
@@ -83,12 +85,15 @@ export default function Chats() {
   const [pendingImage, setPendingImage] = useState<{ uri: string; filename: string; mimeType: string } | null>(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [selectedMessageForMenu, setSelectedMessageForMenu] = useState<{ id: number | string; isOwn: boolean; top: number } | null>(null);
 
   const scrollViewRef = useRef<ScrollView>(null);
   // true when the user is within 100px of the bottom — controls auto-scroll on new messages
   const isAtBottomRef = useRef(true);
   // Y positions captured by onLayout for each message — keyed by message id
   const messageYsRef = useRef<Record<string, number>>({});
+  // current scroll offset — updated on every onScroll so the popup can convert content-Y to viewport-Y
+  const scrollOffsetRef = useRef(0);
   // id of the first unread message to jump to on load, or null = jump to end
   const firstUnreadIdRef = useRef<number | null>(null);
   // skip /read in useFocusEffect on the very first focus — load effect handles it instead
@@ -97,6 +102,8 @@ export default function Chats() {
   const thinkingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // true between send() and the user's own WS echo arriving — tells onMessage to insert the thinking bubble
   const pendingAiMessageRef = useRef(false);
+  // flipped to true after the initial scroll position is set — prevents message updates from re-triggering it
+  const hasPositionedRef = useRef(false);
 
   // When the keyboard slides up, scroll to the bottom so the latest message stays visible
   useEffect(() => {
@@ -140,6 +147,7 @@ export default function Chats() {
     setFetchError(null);
     setIsScrollReady(false);
     messageYsRef.current = {};
+    hasPositionedRef.current = false;
 
     Promise.all([
       fetch(`${API_BASE}/groups/${groupId}/messages`, {
@@ -177,9 +185,11 @@ export default function Chats() {
   // After messages render, onLayout populates messageYsRef. Wait one tick (50ms) for layout
   // to settle — same approach as the web frontend — then jump to the right position.
   useEffect(() => {
+    if (hasPositionedRef.current) return;
     if (isLoading || fetchError !== null) return;
 
     if (messages.length === 0) {
+      hasPositionedRef.current = true;
       setIsScrollReady(true);
       return;
     }
@@ -195,6 +205,7 @@ export default function Chats() {
       } else {
         scrollViewRef.current?.scrollToEnd({ animated: false });
       }
+      hasPositionedRef.current = true;
       setIsScrollReady(true);
     }, 50);
 
@@ -281,6 +292,11 @@ export default function Chats() {
     }, []),
     onNotification: useCallback(() => {
       // cross-group @mention badge — groups screen re-fetches on focus, nothing to do here
+    }, []),
+    onMessageDeleted: useCallback((payload) => {
+      setMessages((prev) =>
+        prev.map((m) => m.id === payload.message_id ? { ...m, is_deleted: true } : m)
+      );
     }, []),
   });
 
@@ -381,8 +397,37 @@ export default function Chats() {
     ]);
   };
 
+  const handleDeleteMessage = (messageId: number | string) => {
+    Alert.alert(
+      "Delete this message?",
+      undefined,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const res = await fetch(`${API_BASE}/groups/${groupId}/messages/${messageId}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (!res.ok) {
+                Alert.alert("Error", "Could not delete the message. Please try again.");
+              }
+              // state update comes from the message_deleted WS broadcast, not here
+            } catch {
+              Alert.alert("Error", "Could not delete the message. Please try again.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleScroll = (event: any) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    scrollOffsetRef.current = contentOffset.y;
     const distanceFromBottom =
       contentSize.height - layoutMeasurement.height - contentOffset.y;
     const atBottom = distanceFromBottom < 100;
@@ -427,7 +472,9 @@ export default function Chats() {
           Hidden until the initial jump completes; overlay keeps the spinner visible until then. */}
       {!isLoading && fetchError === null && (
         <>
-          <View style={[styles.listWrapper, !isScrollReady && styles.hidden]}>
+          <View
+            style={[styles.listWrapper, !isScrollReady && styles.hidden]}
+          >
             <ScrollView
               ref={scrollViewRef}
               contentContainerStyle={styles.listContent}
@@ -441,6 +488,7 @@ export default function Chats() {
                   !isOwn &&
                   !msg.is_bot &&
                   !!user?.username &&
+                  !!msg.text &&
                   msg.text.includes(`@${user.username}`);
                 // show a date pill whenever the SGT day changes between consecutive messages
                 const prevMsg = messages[idx - 1];
@@ -463,13 +511,19 @@ export default function Chats() {
                     )}
                     <MessageBubble
                       sender={msg.sender}
-                      text={msg.text}
+                      text={msg.text ?? ""}
                       is_bot={msg.is_bot}
                       isOwn={isOwn}
                       isTagged={isTagged}
                       timestamp={msg.timestamp}
                       message_type={msg.message_type}
                       isThinking={msg.isThinking}
+                      is_deleted={msg.is_deleted}
+                      onLongPress={
+                        !msg.is_bot && isOwn
+                          ? () => setSelectedMessageForMenu({ id: msg.id, isOwn, top: (messageYsRef.current[msg.id] ?? 0) - scrollOffsetRef.current - 40 + (showSeparator ? 44 : 0) })
+                          : undefined
+                      }
                       image_url={
                         msg.image_url
                           ? // Token goes in the query string because React Native's Image
@@ -490,6 +544,37 @@ export default function Chats() {
               >
                 <Ionicons name="chevron-down" size={18} color="#ffffff" />
               </TouchableOpacity>
+            )}
+            {selectedMessageForMenu !== null && (
+              <Pressable
+                style={StyleSheet.absoluteFillObject}
+                onPress={() => setSelectedMessageForMenu(null)}
+              />
+            )}
+            {selectedMessageForMenu !== null && (
+              <View style={[
+                styles.deletePopupContainer,
+                { top: selectedMessageForMenu.top },
+                selectedMessageForMenu.isOwn ? { right: 16 } : { left: 16 },
+                { alignItems: selectedMessageForMenu.isOwn ? "flex-end" : "flex-start" },
+              ]}>
+                <View style={styles.deletePopup}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      const id = selectedMessageForMenu.id;
+                      setSelectedMessageForMenu(null);
+                      handleDeleteMessage(id as number);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.deletePopupText}>Delete</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={[
+                  styles.deletePopupArrow,
+                  selectedMessageForMenu.isOwn ? { marginRight: 10 } : { marginLeft: 10 },
+                ]} />
+              </View>
             )}
           </View>
           {!isScrollReady && (
@@ -854,5 +939,29 @@ const styles = StyleSheet.create({
   },
   previewBtnDisabled: {
     opacity: 0.6,
+  },
+  deletePopupContainer: {
+    position: "absolute",
+  },
+  deletePopup: {
+    backgroundColor: "#1a1a1a",
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  deletePopupText: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  deletePopupArrow: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 6,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderTopColor: "#1a1a1a",
   },
 });

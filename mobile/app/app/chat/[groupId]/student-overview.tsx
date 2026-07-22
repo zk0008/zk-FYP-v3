@@ -315,7 +315,7 @@ export default function StudentOverview() {
     >
       {/* Header row: title left, History + Save buttons right */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Student Summary</Text>
+        <Text style={styles.headerTitle}>Group Summary</Text>
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={styles.historyBtn}
@@ -424,7 +424,7 @@ export default function StudentOverview() {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.sectionLabel}>Student Summary</Text>
+          <Text style={styles.sectionLabel}>Additional Information</Text>
           <View style={[styles.card, { marginBottom: 20 }]}>
             <TextInput
               style={styles.input}
