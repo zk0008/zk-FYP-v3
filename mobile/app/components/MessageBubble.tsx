@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useEffect } from "react";
-import { View, Text, Image, StyleSheet, TouchableOpacity, Animated } from "react-native";
+import { View, Text, Image, StyleSheet, TouchableOpacity, Animated, Linking } from "react-native";
 import ImageViewerModal from "./ImageViewerModal";
 
 type Props = {
@@ -14,6 +14,8 @@ type Props = {
   isThinking?: boolean;
 };
 
+const URL_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+
 // Append Z if the ISO string has no timezone suffix so Date treats it as UTC, not local time.
 // Then manually shift to SGT (UTC+8) — avoids Intl timezone support which is patchy in Hermes.
 function formatSGT(isoString: string): string {
@@ -24,6 +26,24 @@ function formatSGT(isoString: string): string {
   const ampm = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${m} ${ampm}`;
+}
+
+function linkifyText(text: string, linkStyle?: object) {
+  const parts = text.split(URL_REGEX);
+  // split with a capturing group interleaves results: [plain, url, plain, url, ...]
+  // so every odd-indexed entry is a URL match — no need to test each part separately
+  return parts.map((part, i) => {
+    if (!part) return undefined;
+    if (i % 2 === 1) {
+      const href = part.startsWith("www.") ? `https://${part}` : part;
+      return (
+        <Text key={i} style={linkStyle ?? styles.link} onPress={() => Linking.openURL(href)}>
+          {part}
+        </Text>
+      );
+    }
+    return part;
+  });
 }
 
 // Port of web's formatPlainText — handles ### headings, **bold**, leading bullet dashes,
@@ -38,7 +58,7 @@ function renderPlainText(text: string) {
     if (headerMatch) {
       return (
         <Text key={lineIdx}>
-          <Text style={styles.bold}>{headerMatch[1]}</Text>
+          <Text style={styles.bold}>{linkifyText(headerMatch[1])}</Text>
           {sep}
         </Text>
       );
@@ -52,7 +72,7 @@ function renderPlainText(text: string) {
     const hasBold = parts.some((p) => p.startsWith("**") && p.endsWith("**"));
 
     if (!hasBold) {
-      return <Text key={lineIdx}>{bulleted}{sep}</Text>;
+      return <Text key={lineIdx}>{linkifyText(bulleted)}{sep}</Text>;
     }
 
     return (
@@ -61,7 +81,7 @@ function renderPlainText(text: string) {
           part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
             <Text key={pi} style={styles.bold}>{part.slice(2, -2)}</Text>
           ) : (
-            part
+            <Text key={pi}>{linkifyText(part)}</Text>
           )
         )}
         {sep}
@@ -120,7 +140,7 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
           </TouchableOpacity>
         ) : (
           <View style={[styles.bubble, styles.ownBubble]}>
-            <Text style={styles.ownText}>{text}</Text>
+            <Text style={styles.ownText}>{linkifyText(text, styles.linkOwn)}</Text>
           </View>
         )}
         <Text style={styles.timestamp}>{timeLabel}</Text>
@@ -157,7 +177,7 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
         </TouchableOpacity>
       ) : (
         <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
-          <Text style={styles.otherText}>{text}</Text>
+          <Text style={styles.otherText}>{linkifyText(text)}</Text>
         </View>
       )}
       <Text style={styles.timestamp}>{timeLabel}</Text>
@@ -261,5 +281,14 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: "#7e57c2",
+  },
+  link: {
+    color: "#1565c0",
+    textDecorationLine: "underline",
+  },
+  // own bubble is already blue, so use white underlined instead of dark blue
+  linkOwn: {
+    color: "#ffffff",
+    textDecorationLine: "underline",
   },
 });

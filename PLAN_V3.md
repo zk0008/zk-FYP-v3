@@ -156,6 +156,11 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Fixed message ordering so the thinking indicator appears below the user's own @ai message, not above it
 - Confirmed live on Azure App Service: instant login and /docs, first RAG query pre-warmed in background
 
+**Clickable links in chat** — ✓ Complete
+- URLs in chat messages (including @ai web search sources) now render as tappable links
+- Tapping opens the link in the device's browser
+- Applied to own messages, other users' messages, and AI bot messages including bold text and headings
+
 ---
 
 ## Phase 5 — Pre and Post Survey
