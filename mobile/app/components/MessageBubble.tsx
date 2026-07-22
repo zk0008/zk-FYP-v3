@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useEffect } from "react";
-import { View, Text, Image, StyleSheet, TouchableOpacity, Animated, Linking } from "react-native";
+import { View, Text, Image, StyleSheet, TouchableOpacity, Animated, Linking, Pressable } from "react-native";
 import ImageViewerModal from "./ImageViewerModal";
 
 type Props = {
@@ -12,6 +12,8 @@ type Props = {
   message_type?: string;
   image_url?: string; // fully-constructed authenticated URI, built by chats.tsx
   isThinking?: boolean;
+  is_deleted?: boolean;
+  onLongPress?: () => void;
 };
 
 const URL_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
@@ -126,7 +128,7 @@ function ThinkingDots() {
 }
 
 // memo prevents re-renders when the parent ScrollView re-renders for unrelated reasons
-export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp, message_type, image_url, isThinking }: Props) {
+export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagged, timestamp, message_type, image_url, isThinking, is_deleted, onLongPress }: Props) {
   const timeLabel = formatSGT(timestamp);
   const isImage = message_type === "image" && !!image_url;
   const [showFullImage, setShowFullImage] = useState(false);
@@ -134,14 +136,24 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
   if (isOwn) {
     return (
       <View style={styles.rowRight}>
-        {isImage ? (
-          <TouchableOpacity onPress={() => setShowFullImage(true)} activeOpacity={0.9}>
+        {is_deleted ? (
+          <View style={[styles.bubble, styles.ownBubble]}>
+            <Text style={styles.deletedText}>This message was deleted</Text>
+          </View>
+        ) : isImage ? (
+          <TouchableOpacity
+            onPress={() => setShowFullImage(true)}
+            onLongPress={isOwn && !is_bot ? onLongPress : undefined}
+            activeOpacity={0.9}
+          >
             <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOwn]} />
           </TouchableOpacity>
         ) : (
-          <View style={[styles.bubble, styles.ownBubble]}>
-            <Text style={styles.ownText}>{linkifyText(text, styles.linkOwn)}</Text>
-          </View>
+          <Pressable onLongPress={isOwn && !is_bot ? onLongPress : undefined}>
+            <View style={[styles.bubble, styles.ownBubble]}>
+              <Text style={styles.ownText}>{linkifyText(text, styles.linkOwn)}</Text>
+            </View>
+          </Pressable>
         )}
         <Text style={styles.timestamp}>{timeLabel}</Text>
         <ImageViewerModal
@@ -158,7 +170,9 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
       <View style={styles.rowLeft}>
         <Text style={styles.senderLabel}>AI Bot</Text>
         <View style={[styles.bubble, styles.botBubble]}>
-          {isThinking
+          {is_deleted
+            ? <Text style={styles.deletedText}>This message was deleted</Text>
+            : isThinking
             ? <ThinkingDots />
             : <Text style={styles.otherText}>{renderPlainText(text)}</Text>
           }
@@ -171,14 +185,24 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
   return (
     <View style={styles.rowLeft}>
       <Text style={styles.senderLabel}>{sender}</Text>
-      {isImage ? (
-        <TouchableOpacity onPress={() => setShowFullImage(true)} activeOpacity={0.9}>
+      {is_deleted ? (
+        <View style={[styles.bubble, styles.otherBubble]}>
+          <Text style={styles.deletedText}>This message was deleted</Text>
+        </View>
+      ) : isImage ? (
+        <TouchableOpacity
+          onPress={() => setShowFullImage(true)}
+          onLongPress={isOwn && !is_bot ? onLongPress : undefined}
+          activeOpacity={0.9}
+        >
           <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOther]} />
         </TouchableOpacity>
       ) : (
-        <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
-          <Text style={styles.otherText}>{linkifyText(text)}</Text>
-        </View>
+        <Pressable onLongPress={isOwn && !is_bot ? onLongPress : undefined}>
+          <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
+            <Text style={styles.otherText}>{linkifyText(text)}</Text>
+          </View>
+        </Pressable>
       )}
       <Text style={styles.timestamp}>{timeLabel}</Text>
       <ImageViewerModal
@@ -281,6 +305,12 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: "#7e57c2",
+  },
+  deletedText: {
+    color: "#9e9e9e",
+    fontSize: 15,
+    fontStyle: "italic",
+    lineHeight: 20,
   },
   link: {
     color: "#1565c0",

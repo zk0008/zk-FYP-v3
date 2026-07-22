@@ -161,6 +161,13 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Tapping opens the link in the device's browser
 - Applied to own messages, other users' messages, and AI bot messages including bold text and headings
 
+**Delete message** — ✓ Complete
+- Users can long-press their own text or image messages to delete them
+- Soft delete — message is flagged and shows "This message was deleted" to everyone, including the sender
+- Only the message owner can delete; AI messages and other users' messages cannot be deleted
+- Deletion syncs in real time via WebSocket to all connected users
+- Long-press shows a small popup with a Delete option, confirmed via an alert before deleting
+
 ---
 
 ## Phase 5 — Pre and Post Survey

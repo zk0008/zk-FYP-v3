@@ -258,6 +258,8 @@ async def startup_event():
             conn.commit()
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS student_id TEXT"))
             conn.commit()
+            conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false"))
+            conn.commit()
             # chunks table was just created by create_all() above — build the HNSW index now
             conn.execute(text("CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops)"))
             conn.commit()
@@ -324,6 +326,11 @@ async def startup_event():
                 pass
             try:
                 conn.execute(text("ALTER TABLE users ADD COLUMN student_id TEXT"))
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT 0"))
                 conn.commit()
             except Exception:
                 pass
@@ -954,7 +961,8 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                     "text": content,
                     "is_bot": False,
                     "group_string_id": group_id,
-                    "timestamp": new_message.timestamp.isoformat() + "Z"
+                    "timestamp": new_message.timestamp.isoformat() + "Z",
+                    "is_deleted": False
                 })
 
                 # Nudge members who are connected to a *different* group's WS
@@ -976,7 +984,8 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                         "sender": current_user.username,
                         "text": content,
                         "is_bot": False,
-                        "group_string_id": group_id
+                        "group_string_id": group_id,
+                        "is_deleted": False
                     })
                     # this user has no live WebSocket — send a push notification
                     # so they see a banner even if the app is backgrounded/closed
@@ -1065,7 +1074,8 @@ async def websocket_endpoint(websocket: WebSocket, group_id: str):
                                 "text": ai_message.content,
                                 "is_bot": True,
                                 "group_string_id": group_id,
-                                "timestamp": ai_message.timestamp.isoformat() + "Z"
+                                "timestamp": ai_message.timestamp.isoformat() + "Z",
+                                "is_deleted": False
                             })
 
         except WebSocketDisconnect:
@@ -1432,11 +1442,12 @@ def list_messages(
         result.append({
             "id": msg.id,
             "sender": sender,
-            "text": msg.content,
+            "text": None if msg.is_deleted else msg.content,
             "is_bot": msg.is_AI,
             "message_type": msg_type,
-            "image_url": image_url,
-            "timestamp": msg.timestamp.isoformat() + "Z"
+            "image_url": None if msg.is_deleted else image_url,
+            "timestamp": msg.timestamp.isoformat() + "Z",
+            "is_deleted": msg.is_deleted
         })
 
     return result
@@ -1565,7 +1576,8 @@ async def upload_image_message(
         "message_type": "image",
         "image_url": image_url,
         "group_string_id": group_id,
-        "timestamp": new_message.timestamp.isoformat()
+        "timestamp": new_message.timestamp.isoformat(),
+        "is_deleted": False
     })
 
     return {
@@ -1639,6 +1651,43 @@ def get_image_message(
         ext = file_path.suffix.lower()
         mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
         return FileResponse(path=file_path, media_type=mime)
+
+
+@app.delete("/groups/{group_id}/messages/{message_id}")
+async def delete_message(
+    group_id: str,
+    message_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_group = db.query(models.Group).filter(models.Group.string_id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    if not check_group_access(group_id, current_user, db):
+        raise HTTPException(status_code=403, detail="Access denied to this group")
+
+    msg = db.query(models.Message).filter(
+        models.Message.id == message_id,
+        models.Message.group_id == db_group.id
+    ).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # user_id is None on AI messages, so this also blocks anyone from deleting those
+    if current_user.id != msg.user_id:
+        raise HTTPException(status_code=403, detail="You can only delete your own messages.")
+
+    msg.is_deleted = True
+    db.commit()
+
+    await manager.broadcast_to_group(group_id, {
+        "type": "message_deleted",
+        "message_id": msg.id,
+        "group_string_id": group_id
+    })
+
+    return {"message": "Message deleted."}
 
 
 @app.get("/groups/{group_id}/documents")

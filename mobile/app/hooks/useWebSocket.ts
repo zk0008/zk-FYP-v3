@@ -29,14 +29,21 @@ export type NotificationPayload = {
   created_at: string;
 };
 
+export type MessageDeletedPayload = {
+  type: "message_deleted";
+  message_id: number;
+  group_string_id: string;
+};
+
 type Options = {
   groupId: string;
   token: string;
   onMessage: (msg: MessagePayload) => void;
   onNotification: (notif: NotificationPayload) => void;
+  onMessageDeleted?: (payload: MessageDeletedPayload) => void;
 };
 
-export function useWebSocket({ groupId, token, onMessage, onNotification }: Options) {
+export function useWebSocket({ groupId, token, onMessage, onNotification, onMessageDeleted }: Options) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCountRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -46,8 +53,10 @@ export function useWebSocket({ groupId, token, onMessage, onNotification }: Opti
   // Keep callbacks in refs so the connect() closure never goes stale
   const onMessageRef = useRef(onMessage);
   const onNotificationRef = useRef(onNotification);
+  const onMessageDeletedRef = useRef(onMessageDeleted);
   useEffect(() => { onMessageRef.current = onMessage; }, [onMessage]);
   useEffect(() => { onNotificationRef.current = onNotification; }, [onNotification]);
+  useEffect(() => { onMessageDeletedRef.current = onMessageDeleted; }, [onMessageDeleted]);
 
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +85,8 @@ export function useWebSocket({ groupId, token, onMessage, onNotification }: Opti
           onMessageRef.current(payload as MessagePayload);
         } else if (payload.type === "notification") {
           onNotificationRef.current(payload as NotificationPayload);
+        } else if (payload.type === "message_deleted") {
+          onMessageDeletedRef.current?.(payload as MessageDeletedPayload);
         }
       } catch {
         // malformed frame — skip it

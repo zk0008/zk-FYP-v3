@@ -66,6 +66,7 @@ class Message(Base):
     message_type = Column(String, default="text", nullable=False)  # "text" or "image"
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     sources = Column(JSON, nullable=True)  # Array of source objects: [{"type": "document", "filename": "...", "id": ...}, ...]
+    is_deleted = Column(Boolean, default=False, nullable=False)
 
     # Relationships
     group = relationship("Group", back_populates="messages")
