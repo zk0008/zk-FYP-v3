@@ -30,10 +30,44 @@ function formatSGT(isoString: string): string {
   return `${h12}:${m} ${ampm}`;
 }
 
+// for ) and ] we only strip when they're unbalanced — Wikipedia-style URLs like /wiki/Foo_(bar) are legitimate.
+// periods, commas, etc. are always stripped since real URLs don't end in those in normal prose.
+function stripTrailingPunct(url: string): { url: string; stripped: string } {
+  let stripped = "";
+  let u = url;
+  let keepStripping = true;
+  while (keepStripping && u.length > 0) {
+    keepStripping = false;
+    const last = u[u.length - 1];
+    if (".,:!?;'\"".includes(last)) {
+      stripped = last + stripped;
+      u = u.slice(0, -1);
+      keepStripping = true;
+    } else if (last === ")") {
+      const opens = (u.match(/\(/g) ?? []).length;
+      const closes = (u.match(/\)/g) ?? []).length;
+      if (closes > opens) { stripped = last + stripped; u = u.slice(0, -1); keepStripping = true; }
+    } else if (last === "]") {
+      const opens = (u.match(/\[/g) ?? []).length;
+      const closes = (u.match(/\]/g) ?? []).length;
+      if (closes > opens) { stripped = last + stripped; u = u.slice(0, -1); keepStripping = true; }
+    }
+  }
+  return { url: u, stripped };
+}
+
 function linkifyText(text: string, linkStyle?: object) {
   const parts = text.split(URL_REGEX);
   // split with a capturing group interleaves results: [plain, url, plain, url, ...]
   // so every odd-indexed entry is a URL match — no need to test each part separately
+
+  // strip trailing punctuation from each URL and give it back to the following plain-text chunk
+  for (let i = 1; i < parts.length; i += 2) {
+    const { url, stripped } = stripTrailingPunct(parts[i]);
+    parts[i] = url;
+    if (stripped) parts[i + 1] = stripped + (parts[i + 1] ?? "");
+  }
+
   return parts.map((part, i) => {
     if (!part) return undefined;
     if (i % 2 === 1) {
