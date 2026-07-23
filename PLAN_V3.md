@@ -85,8 +85,10 @@ components for the final submission.
 - iOS and Android builds via Expo
 - APK (Android) and IPA (iOS) for distribution
 
-**Distribution method (confirmed)**
-- iOS via Expo Go (bypasses Apple Developer cost, push notifications and date pickers confirmed working on real device), Android via standalone APK build
+**Distribution method (updated)**
+- Android via standalone APK build — confirmed working, no cost
+- iOS via Expo Go — investigated further and confirmed NOT viable. Expo Go restricts loading published updates to projects the developer owns, and the current publishing mechanism is incompatible with Expo Go entirely.
+- Decision: proceed with the Apple Developer Program (Individual, $99 USD/year) for iOS distribution via TestFlight instead
 
 **Web version**
 - Web version of the application
