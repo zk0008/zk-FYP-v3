@@ -6,7 +6,6 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Keyboard,
   Platform,
   StyleSheet,
@@ -17,7 +16,6 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useGlobalSearchParams, useFocusEffect } from "expo-router";
-import { useHeaderHeight } from "@react-navigation/elements";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../../hooks/useAuth";
 import { useWebSocket } from "../../../hooks/useWebSocket";
@@ -70,7 +68,6 @@ export default function Chats() {
   // so useLocalSearchParams (scoped to the current tab screen) doesn't see it
   const { groupId } = useGlobalSearchParams<{ groupId: string }>();
   const { token, user } = useAuth();
-  const headerHeight = useHeaderHeight();
   const insets = useSafeAreaInsets();
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -113,19 +110,33 @@ export default function Chats() {
     return () => sub.remove();
   }, []);
 
-  // on Android, track keyboard height so the inputBar can manually lift above it
+  // track keyboard height so the inputBar can manually lift above it on both platforms
   useEffect(() => {
-    if (Platform.OS !== "android") return;
-    const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
-      setKeyboardHeight(e.endCoordinates.height + insets.bottom);
-    });
-    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
-      setKeyboardHeight(0);
-    });
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
+    if (Platform.OS === "ios") {
+      // willShow/willHide fire before the animation starts on iOS — avoids visual lag
+      // iOS already includes safe area in endCoordinates.height, so no insets.bottom needed
+      const showSub = Keyboard.addListener("keyboardWillShow", (e) => {
+        setKeyboardHeight(e.endCoordinates.height);
+      });
+      const hideSub = Keyboard.addListener("keyboardWillHide", () => {
+        setKeyboardHeight(0);
+      });
+      return () => {
+        showSub.remove();
+        hideSub.remove();
+      };
+    } else {
+      const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
+        setKeyboardHeight(e.endCoordinates.height + insets.bottom);
+      });
+      const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+        setKeyboardHeight(0);
+      });
+      return () => {
+        showSub.remove();
+        hideSub.remove();
+      };
+    }
   }, []);
 
   // Fetch the group member list once on mount so the @mention picker has names to show
@@ -443,10 +454,9 @@ export default function Chats() {
       ? members.filter((m) => m.username.toLowerCase().startsWith(mentionQuery))
       : [];
 
-  const inputBarStyle =
-    Platform.OS === "android"
-      ? [styles.inputBar, { marginBottom: keyboardHeight }]
-      : styles.inputBar;
+  const inputBarStyle = keyboardHeight > 0
+    ? [styles.inputBar, { marginBottom: keyboardHeight }]
+    : styles.inputBar;
 
   const content = (
     <>
@@ -711,18 +721,6 @@ export default function Chats() {
       </Modal>
     </>
   );
-
-  if (Platform.OS === "ios") {
-    return (
-      <KeyboardAvoidingView
-        style={styles.outer}
-        behavior="padding"
-        keyboardVerticalOffset={headerHeight}
-      >
-        {content}
-      </KeyboardAvoidingView>
-    );
-  }
 
   return <View style={styles.outer}>{content}</View>;
 }
