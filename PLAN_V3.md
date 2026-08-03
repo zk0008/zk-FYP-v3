@@ -170,6 +170,12 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Deletion syncs in real time via WebSocket to all connected users
 - Long-press shows a small popup with a Delete option, confirmed via an alert before deleting
 
+**Android build fixes** — ✓ Complete
+- Fixed Microsoft login on Android — added dedicated redirect screen to handle the zkfyp://redirect deep link correctly, avoiding Expo Router's "Unmatched Route" error
+- Fixed KeyboardAvoidingView covering inputs/modals on Android — changed behavior from "height" to undefined on Android across 6 modals/screens (Technical Support, Announcements, Add/Edit User, New Group, Student/Group Summary), following Expo's official recommendation that Android's native adjustResize already handles this without KeyboardAvoidingView's behavior prop
+- Fixed bottom pill buttons (Feedback, Announcements) being covered by Android's gesture navigation bar using useSafeAreaInsets
+- iOS behavior confirmed unchanged across all fixes
+
 ---
 
 ## Phase 5 — Pre and Post Survey

@@ -599,7 +599,7 @@ export default function Admin() {
         onRequestClose={() => setShowAddUser(false)}
       >
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddUser(false)}>
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
             <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalContent}>
               <ScrollView keyboardShouldPersistTaps="handled">
@@ -710,7 +710,7 @@ export default function Admin() {
         onRequestClose={() => setShowEditUser(false)}
       >
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowEditUser(false)}>
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
             <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalContent}>
               <ScrollView keyboardShouldPersistTaps="handled">
@@ -907,7 +907,7 @@ export default function Admin() {
         onRequestClose={() => setShowNewGroup(false)}
       >
         <TouchableOpacity style={styles.newGroupOverlay} activeOpacity={1} onPress={() => setShowNewGroup(false)}>
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
             <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
               <View style={styles.newGroupContent}>
                 <ScrollView keyboardShouldPersistTaps="handled">
