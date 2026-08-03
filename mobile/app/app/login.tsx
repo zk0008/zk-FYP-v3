@@ -40,7 +40,7 @@ export default function Login() {
     {
       clientId: MS_CLIENT_ID,
       scopes: ["openid", "profile", "email"],
-      redirectUri: AuthSession.makeRedirectUri({ scheme: "zkfyp" }),
+      redirectUri: AuthSession.makeRedirectUri({ scheme: "zkfyp", path: "redirect" }),
       extraParams: { prompt: "select_account" },
     },
     MS_DISCOVERY
@@ -58,7 +58,7 @@ export default function Login() {
             {
               clientId: MS_CLIENT_ID,
               code,
-              redirectUri: AuthSession.makeRedirectUri({ scheme: "zkfyp" }),
+              redirectUri: AuthSession.makeRedirectUri({ scheme: "zkfyp", path: "redirect" }),
               extraParams: { code_verifier: request?.codeVerifier ?? "" },
             },
             MS_DISCOVERY

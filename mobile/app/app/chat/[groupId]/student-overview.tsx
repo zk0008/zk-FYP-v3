@@ -310,7 +310,7 @@ export default function StudentOverview() {
   return (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={headerHeight}
     >
       {/* Header row: title left, History + Save buttons right */}

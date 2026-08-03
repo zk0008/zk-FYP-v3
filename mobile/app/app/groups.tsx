@@ -11,7 +11,7 @@ import {
   StyleSheet,
   Alert,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../hooks/useAuth";
@@ -27,6 +27,7 @@ const separatorStyle = { height: 1, backgroundColor: "#f0f0f0", marginLeft: 16 }
 export default function Groups() {
   const { user, logout, isAuthenticated, isLoading: isAuthLoading, token } = useAuth();
   const { groups, isLoading, error, refresh } = useGroups();
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -257,7 +258,7 @@ export default function Groups() {
           activeOpacity={1}
           onPress={() => setShowBroadcasts(false)}
         >
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
             <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
               <View style={styles.settingsContent}>
                 <Text style={styles.settingsTitle}>Announcements</Text>
@@ -335,7 +336,7 @@ export default function Groups() {
           activeOpacity={1}
           onPress={() => setShowFeedback(false)}
         >
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
             <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
               <View style={styles.settingsContent}>
                 <Text style={styles.settingsTitle}>Technical Support</Text>
@@ -500,7 +501,7 @@ export default function Groups() {
         )}
       </View>
 
-      <View style={styles.bottomPills}>
+      <View style={[styles.bottomPills, { bottom: 16 + insets.bottom }]}>
         <TouchableOpacity style={styles.feedbackBtn} onPress={openFeedback} activeOpacity={0.8}>
           <Text style={styles.feedbackBtnText}>Technical Support</Text>
         </TouchableOpacity>
