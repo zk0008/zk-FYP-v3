@@ -15,6 +15,7 @@ import {
   Pressable,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as Clipboard from "expo-clipboard";
 import { useGlobalSearchParams, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../../hooks/useAuth";
@@ -82,7 +83,7 @@ export default function Chats() {
   const [pendingImage, setPendingImage] = useState<{ uri: string; filename: string; mimeType: string } | null>(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [selectedMessageForMenu, setSelectedMessageForMenu] = useState<{ id: number | string; isOwn: boolean; top: number } | null>(null);
+  const [selectedMessageForMenu, setSelectedMessageForMenu] = useState<{ id: number | string; isOwn: boolean; isBot: boolean; text: string | null; isImage: boolean; top: number } | null>(null);
 
   const scrollViewRef = useRef<ScrollView>(null);
   // true when the user is within 100px of the bottom — controls auto-scroll on new messages
@@ -408,6 +409,12 @@ export default function Chats() {
     ]);
   };
 
+  const handleCopyMessage = async (text: string) => {
+    setSelectedMessageForMenu(null);
+    await Clipboard.setStringAsync(text);
+    Alert.alert("Copied", "Message copied to clipboard.");
+  };
+
   const handleDeleteMessage = (messageId: number | string) => {
     Alert.alert(
       "Delete this message?",
@@ -457,6 +464,9 @@ export default function Chats() {
   const inputBarStyle = keyboardHeight > 0
     ? [styles.inputBar, { marginBottom: keyboardHeight }]
     : styles.inputBar;
+
+  const showCopy = selectedMessageForMenu !== null && !!selectedMessageForMenu.text && !selectedMessageForMenu.isImage;
+  const showDelete = selectedMessageForMenu !== null && selectedMessageForMenu.isOwn && !selectedMessageForMenu.isBot;
 
   const content = (
     <>
@@ -530,9 +540,7 @@ export default function Chats() {
                       isThinking={msg.isThinking}
                       is_deleted={msg.is_deleted}
                       onLongPress={
-                        !msg.is_bot && isOwn
-                          ? () => setSelectedMessageForMenu({ id: msg.id, isOwn, top: (messageYsRef.current[msg.id] ?? 0) - scrollOffsetRef.current - 40 + (showSeparator ? 44 : 0) })
-                          : undefined
+                        () => setSelectedMessageForMenu({ id: msg.id, isOwn, isBot: msg.is_bot, text: msg.text, isImage: msg.message_type === "image", top: (messageYsRef.current[msg.id] ?? 0) - scrollOffsetRef.current - 40 + (showSeparator ? 44 : 0) })
                       }
                       image_url={
                         msg.image_url
@@ -555,30 +563,43 @@ export default function Chats() {
                 <Ionicons name="chevron-down" size={18} color="#ffffff" />
               </TouchableOpacity>
             )}
-            {selectedMessageForMenu !== null && (
+            {selectedMessageForMenu !== null && (showCopy || showDelete) && (
               <Pressable
                 style={StyleSheet.absoluteFillObject}
                 onPress={() => setSelectedMessageForMenu(null)}
               />
             )}
-            {selectedMessageForMenu !== null && (
+            {selectedMessageForMenu !== null && (showCopy || showDelete) && (
               <View style={[
                 styles.deletePopupContainer,
-                { top: selectedMessageForMenu.top },
+                { top: selectedMessageForMenu.top - 60 },
                 selectedMessageForMenu.isOwn ? { right: 16 } : { left: 16 },
                 { alignItems: selectedMessageForMenu.isOwn ? "flex-end" : "flex-start" },
               ]}>
-                <View style={styles.deletePopup}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      const id = selectedMessageForMenu.id;
-                      setSelectedMessageForMenu(null);
-                      handleDeleteMessage(id as number);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.deletePopupText}>Delete</Text>
-                  </TouchableOpacity>
+                <View style={[styles.deletePopup, { paddingVertical: 0 }]}>
+                  {showCopy && (
+                    <TouchableOpacity
+                      style={styles.popupItem}
+                      onPress={() => handleCopyMessage(selectedMessageForMenu.text ?? "")}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.deletePopupText}>Copy</Text>
+                    </TouchableOpacity>
+                  )}
+                  {showCopy && showDelete && <View style={styles.popupDivider} />}
+                  {showDelete && (
+                    <TouchableOpacity
+                      style={styles.popupItem}
+                      onPress={() => {
+                        const id = selectedMessageForMenu.id;
+                        setSelectedMessageForMenu(null);
+                        handleDeleteMessage(id as number);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.deletePopupText}>Delete</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
                 <View style={[
                   styles.deletePopupArrow,
@@ -940,6 +961,8 @@ const styles = StyleSheet.create({
   },
   deletePopupContainer: {
     position: "absolute",
+    height: 100,
+    justifyContent: "flex-end",
   },
   deletePopup: {
     backgroundColor: "#1a1a1a",
@@ -951,6 +974,15 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 14,
     fontWeight: "600",
+  },
+  popupItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  popupDivider: {
+    height: 1,
+    backgroundColor: "#333333",
+    marginHorizontal: 16,
   },
   deletePopupArrow: {
     width: 0,
