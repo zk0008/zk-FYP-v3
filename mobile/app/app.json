@@ -17,7 +17,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.zk0008.collabgpt",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryAddUsageDescription": "Allow CollabGPT to save images to your photo library."
       }
     },
     "android": {
@@ -38,7 +39,12 @@
       "@react-native-community/datetimepicker",
       "expo-secure-store",
       "expo-web-browser",
-      "expo-build-properties"
+      "expo-build-properties",
+      ["expo-media-library", {
+        "photosPermission": "Allow CollabGPT to access your photos.",
+        "savePhotosPermission": "Allow CollabGPT to save images to your photo library.",
+        "isAccessMediaLocationEnabled": false
+      }]
     ],
     "extra": {
       "router": {},
