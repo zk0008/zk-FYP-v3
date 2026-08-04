@@ -177,13 +177,13 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
         ) : isImage ? (
           <TouchableOpacity
             onPress={() => setShowFullImage(true)}
-            onLongPress={isOwn && !is_bot ? onLongPress : undefined}
+            onLongPress={onLongPress}
             activeOpacity={0.9}
           >
             <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOwn]} />
           </TouchableOpacity>
         ) : (
-          <Pressable onLongPress={isOwn && !is_bot ? onLongPress : undefined}>
+          <Pressable onLongPress={onLongPress}>
             <View style={[styles.bubble, styles.ownBubble]}>
               <Text style={styles.ownText}>{linkifyText(text, styles.linkOwn)}</Text>
             </View>
@@ -203,14 +203,16 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
     return (
       <View style={styles.rowLeft}>
         <Text style={styles.senderLabel}>AI Bot</Text>
-        <View style={[styles.bubble, styles.botBubble]}>
-          {is_deleted
-            ? <Text style={styles.deletedText}>This message was deleted</Text>
-            : isThinking
-            ? <ThinkingDots />
-            : <Text style={styles.otherText}>{renderPlainText(text)}</Text>
-          }
-        </View>
+        <Pressable onLongPress={onLongPress}>
+          <View style={[styles.bubble, styles.botBubble]}>
+            {is_deleted
+              ? <Text style={styles.deletedText}>This message was deleted</Text>
+              : isThinking
+              ? <ThinkingDots />
+              : <Text style={styles.otherText}>{renderPlainText(text)}</Text>
+            }
+          </View>
+        </Pressable>
         {!isThinking && <Text style={styles.timestamp}>{timeLabel}</Text>}
       </View>
     );
@@ -226,13 +228,13 @@ export default memo(function MessageBubble({ sender, text, is_bot, isOwn, isTagg
       ) : isImage ? (
         <TouchableOpacity
           onPress={() => setShowFullImage(true)}
-          onLongPress={isOwn && !is_bot ? onLongPress : undefined}
+          onLongPress={onLongPress}
           activeOpacity={0.9}
         >
           <Image source={{ uri: image_url }} style={[styles.imageThumbnail, styles.imageThumbnailOther]} />
         </TouchableOpacity>
       ) : (
-        <Pressable onLongPress={isOwn && !is_bot ? onLongPress : undefined}>
+        <Pressable onLongPress={onLongPress}>
           <View style={[styles.bubble, styles.otherBubble, isTagged && styles.taggedBubble]}>
             <Text style={styles.otherText}>{linkifyText(text)}</Text>
           </View>

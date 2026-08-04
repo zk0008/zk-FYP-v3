@@ -1217,7 +1217,7 @@ def microsoft_login(body: MicrosoftLoginRequest, db: Session = Depends(get_db)):
     # Microsoft tokens put the email in "email" or fall back to "preferred_username"
     email = (payload.get("email") or payload.get("preferred_username", "")).lower().strip()
 
-    if not email.lower().endswith("@e.ntu.edu.sg"):
+    if not email.endswith("@ntu.edu.sg"):
         raise HTTPException(status_code=403, detail="Only NTU accounts are allowed.")
 
     user = db.query(models.User).filter(models.User.email == email).first()

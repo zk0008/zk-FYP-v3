@@ -170,6 +170,12 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Deletion syncs in real time via WebSocket to all connected users
 - Long-press shows a small popup with a Delete option, confirmed via an alert before deleting
 
+**Copy message** — ✓ Complete
+- Long-press any message with text (own, other users', or AI) to copy it to the clipboard
+- Delete option remains available only for own non-bot messages, alongside Copy
+- Copy excluded for image messages, since only the file path would be copied, not the image itself
+- Popup positioning fixed to grow upward from a fixed anchor point, so both single-option (Delete only) and dual-option (Copy + Delete) popups sit at the same consistent distance from the message
+
 **Android build fixes** — ✓ Complete
 - Fixed Microsoft login on Android — added dedicated redirect screen to handle the zkfyp://redirect deep link correctly, avoiding Expo Router's "Unmatched Route" error
 - Fixed KeyboardAvoidingView covering inputs/modals on Android — changed behavior from "height" to undefined on Android across 6 modals/screens (Technical Support, Announcements, Add/Edit User, New Group, Student/Group Summary), following Expo's official recommendation that Android's native adjustResize already handles this without KeyboardAvoidingView's behavior prop
