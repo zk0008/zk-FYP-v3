@@ -182,6 +182,12 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Deleted messages are now correctly excluded from @ai's conversation context (bug fix)
 - Fixed a bug where blob storage image paths were incorrectly rejected by a path traversal check meant only for local disk storage
 
+**Save image to photo gallery** — ✓ Complete
+- Added a Save button to the full-screen image viewer
+- Downloads and saves images to the device's photo library on both iOS and Android
+- Handles permission requests and denial gracefully with a link to device settings
+- Confirmed working on physical iOS device; Android confirmed working after fixing a media library plugin permission scoping issue
+
 **Android build fixes** — ✓ Complete
 - Fixed Microsoft login on Android — added dedicated redirect screen to handle the zkfyp://redirect deep link correctly, avoiding Expo Router's "Unmatched Route" error
 - Fixed KeyboardAvoidingView covering inputs/modals on Android — changed behavior from "height" to undefined on Android across 6 modals/screens (Technical Support, Announcements, Add/Edit User, New Group, Student/Group Summary), following Expo's official recommendation that Android's native adjustResize already handles this without KeyboardAvoidingView's behavior prop
