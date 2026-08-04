@@ -644,6 +644,9 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
             # Build conversation history
             conversation_history = []
             for msg in recent_messages:
+                # deleted messages never surface to the AI
+                if msg.is_deleted:
+                    continue
                 if msg.is_AI:
                     conversation_history.append({
                         "role": "assistant",
@@ -651,10 +654,55 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                     })
                 else:
                     msg_sender = msg.user.username if msg.user else "Unknown"
-                    conversation_history.append({
-                        "role": "user",
-                        "content": f"{msg_sender}: {msg.content}"
-                    })
+                    if msg.message_type == "image":
+                        # try to give the model the actual image bytes; fall back to a
+                        # plain text placeholder if the file can't be fetched for any reason
+                        img_content = None
+                        logging.info(f"Attempting image fetch for message {msg.id}, message_type={msg.message_type}, is_blob_storage_enabled={is_blob_storage_enabled()}")
+                        if is_blob_storage_enabled():
+                            try:
+                                img_bytes = download_blob("images", msg.content)
+                                ext = os.path.splitext(msg.content)[1].lower()
+                                mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+                                b64 = base64.b64encode(img_bytes).decode("utf-8")
+                                img_content = b64, mime
+                                logging.info(f"Image fetch succeeded for message {msg.id}")
+                            except Exception as e:
+                                logging.warning(f"Image fetch failed for message {msg.id}: {str(e)}")
+                        else:
+                            file_path = Path(msg.content).resolve()
+                            if not file_path.is_relative_to((IMAGE_STORAGE_DIR / group_id).resolve()):
+                                logging.warning("Skipping image outside group directory: %s", msg.content)
+                            else:
+                                try:
+                                    ext = file_path.suffix.lower()
+                                    mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+                                    with open(file_path, "rb") as f:
+                                        b64 = base64.b64encode(f.read()).decode("utf-8")
+                                    img_content = b64, mime
+                                    logging.info(f"Image fetch succeeded for message {msg.id}")
+                                except Exception as e:
+                                    logging.warning(f"Image fetch failed for message {msg.id}: {str(e)}")
+
+                        if img_content:
+                            b64, mime = img_content
+                            conversation_history.append({
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": f"{msg_sender}: [sent an image]"},
+                                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                                ]
+                            })
+                        else:
+                            conversation_history.append({
+                                "role": "user",
+                                "content": f"{msg_sender}: [sent an image]"
+                            })
+                    else:
+                        conversation_history.append({
+                            "role": "user",
+                            "content": f"{msg_sender}: {msg.content}"
+                        })
 
             # The exact phrase Case 2 tells GPT-4o to say when the answer isn't
             # in the document — pipeline looks for this string to trigger Case 3
@@ -690,7 +738,8 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                     system_message = (
                         f"Answer the question using ONLY the document provided below. "
                         f"Cite the source inline as [{matched_display}] when you use information from it. "
-                        f"Do not use general knowledge. Do not make up information.\n\n"
+                        f"Do not use general knowledge. Do not make up information. "
+                        f"If the conversation includes any images, consider their visual content when answering the question.\n\n"
                         f"Document ({matched_display}):\n\n{context_str}"
                     )
                     messages = [{"role": "system", "content": system_message}]
@@ -723,7 +772,8 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                         "Answer the question using ONLY the context passages provided below. "
                         "Each passage is labelled with its source file in square brackets. "
                         "Cite the source inline as [filename.pdf] when you use information from it. "
-                        "Do not use general knowledge. Do not make up information.\n\n"
+                        "Do not use general knowledge. Do not make up information. "
+                        "If the conversation includes any images, consider their visual content when answering the question.\n\n"
                         "Context:\n\n" + context_str
                     )
 
@@ -764,7 +814,8 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                             f"Answer the question using ONLY the document passages provided below. "
                             f"Cite the source inline as [{fallback_filename}] when you use information from it. "
                             f"If the answer is genuinely not in the passages, reply with exactly: "
-                            f"\"{REFUSAL_PHRASE}\"\n\n"
+                            f"\"{REFUSAL_PHRASE}\" "
+                            f"If the conversation includes any images, consider their visual content when answering the question.\n\n"
                             f"Passages from {fallback_filename}:\n\n{fallback_text}"
                         )
 
@@ -824,7 +875,8 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                                 "Answer using the web search results provided below. "
                                 "Clearly state in your response that this information comes from "
                                 "a web search, not the uploaded documents. "
-                                "Include the source URLs in your response.\n\n"
+                                "Include the source URLs in your response. "
+                                "If the conversation includes any images, consider their visual content when answering the question.\n\n"
                                 "Web search results:\n\n" + context_str
                             )
 

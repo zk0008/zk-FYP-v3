@@ -176,6 +176,12 @@ This decision was made after comparing against Render (Paid, $7/month) and Railw
 - Copy excluded for image messages, since only the file path would be copied, not the image itself
 - Popup positioning fixed to grow upward from a fixed anchor point, so both single-option (Delete only) and dual-option (Copy + Delete) popups sit at the same consistent distance from the message
 
+**@ai live image summarization** — ✓ Complete
+- @ai can now see and answer questions about images shared in the last 10 messages of a conversation, not just at weekly summary time
+- Students can ask anything about a recently shared image (not a fixed prompt), same natural @ai conversation flow
+- Deleted messages are now correctly excluded from @ai's conversation context (bug fix)
+- Fixed a bug where blob storage image paths were incorrectly rejected by a path traversal check meant only for local disk storage
+
 **Android build fixes** — ✓ Complete
 - Fixed Microsoft login on Android — added dedicated redirect screen to handle the zkfyp://redirect deep link correctly, avoiding Expo Router's "Unmatched Route" error
 - Fixed KeyboardAvoidingView covering inputs/modals on Android — changed behavior from "height" to undefined on Android across 6 modals/screens (Technical Support, Announcements, Add/Edit User, New Group, Student/Group Summary), following Expo's official recommendation that Android's native adjustResize already handles this without KeyboardAvoidingView's behavior prop
