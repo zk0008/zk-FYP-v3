@@ -52,12 +52,6 @@
         "projectId": "830cea10-c81d-4136-8396-2be09da72a05"
       }
     },
-    "owner": "zk0008",
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
-    "updates": {
-      "url": "https://u.expo.dev/830cea10-c81d-4136-8396-2be09da72a05"
-    }
+    "owner": "zk0008"
   }
 }
