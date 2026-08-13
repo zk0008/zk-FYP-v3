@@ -3556,6 +3556,31 @@ def admin_hard_delete_user(
     ).delete(synchronize_session=False)
     db.query(models.GroupMember).filter(models.GroupMember.user_id == user_id).delete()
     db.query(models.PushToken).filter(models.PushToken.user_id == user_id).delete()
+    # nullable FKs — set to NULL so rows survive with their history intact
+    db.query(models.Message).filter(models.Message.user_id == user_id).update(
+        {"user_id": None}, synchronize_session=False
+    )
+    db.query(models.Document).filter(models.Document.uploaded_by_user_id == user_id).update(
+        {"uploaded_by_user_id": None}, synchronize_session=False
+    )
+    db.query(models.Summary).filter(models.Summary.created_by_user_id == user_id).update(
+        {"created_by_user_id": None}, synchronize_session=False
+    )
+    db.query(models.StudentSummary).filter(models.StudentSummary.created_by_user_id == user_id).update(
+        {"created_by_user_id": None}, synchronize_session=False
+    )
+    db.query(models.Deadline).filter(models.Deadline.set_by_user_id == user_id).update(
+        {"set_by_user_id": None}, synchronize_session=False
+    )
+    db.query(models.CoursePeriod).filter(models.CoursePeriod.set_by_user_id == user_id).update(
+        {"set_by_user_id": None}, synchronize_session=False
+    )
+    db.query(models.Broadcast).filter(models.Broadcast.sent_by_user_id == user_id).update(
+        {"sent_by_user_id": None}, synchronize_session=False
+    )
+    db.query(models.Feedback).filter(models.Feedback.submitted_by_user_id == user_id).update(
+        {"submitted_by_user_id": None}, synchronize_session=False
+    )
     db.delete(user)
     db.commit()
     return {"message": "User permanently deleted."}
