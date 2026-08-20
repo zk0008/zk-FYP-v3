@@ -428,13 +428,29 @@ async def startup_event():
     # model is usually ready well before the first @ai query arrives
     asyncio.get_running_loop().run_in_executor(None, warm_reranker)
 
-# Initialize OpenAI client with API key from environment variable
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    print("WARNING: OPENAI_API_KEY environment variable not set. AI features will not work.")
-    openai_client = None
+# Use Azure OpenAI if all three Azure vars are set, otherwise fall back to plain OpenAI
+_azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+_azure_key = os.getenv("AZURE_OPENAI_API_KEY")
+_azure_chat_deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT")
+
+if _azure_endpoint and _azure_key and _azure_chat_deployment:
+    openai_client = OpenAI(
+        base_url=_azure_endpoint,
+        api_key=_azure_key
+    )
+    CHAT_MODEL = _azure_chat_deployment
+    USE_AZURE = True
+    print(f"AI provider: Azure OpenAI (deployment: {CHAT_MODEL})")
+elif os.getenv("OPENAI_API_KEY"):
+    openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    CHAT_MODEL = "gpt-4o"
+    USE_AZURE = False
+    print("AI provider: OpenAI direct")
 else:
-    openai_client = OpenAI(api_key=openai_api_key)
+    print("WARNING: No OpenAI API key set. AI features will not work.")
+    openai_client = None
+    CHAT_MODEL = "gpt-4o"
+    USE_AZURE = False
 
 # Setup PDF storage directory
 PDF_STORAGE_DIR = Path("uploads/pdfs")
@@ -746,9 +762,9 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                     messages.extend(conversation_history)
                     messages.append({"role": "user", "content": question})
                     response = openai_client.chat.completions.create(
-                        model="gpt-4o",
+                        model=CHAT_MODEL,
                         messages=messages,
-                        max_tokens=500,
+                        **({"max_completion_tokens": 500} if USE_AZURE else {"max_tokens": 500}),
                         temperature=0.7
                     )
                     ai_text = response.choices[0].message.content
@@ -782,9 +798,9 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                     messages.append({"role": "user", "content": question})
 
                     response = openai_client.chat.completions.create(
-                        model="gpt-4o",
+                        model=CHAT_MODEL,
                         messages=messages,
-                        max_tokens=500,
+                        **({"max_completion_tokens": 500} if USE_AZURE else {"max_tokens": 500}),
                         temperature=0.7
                     )
                     ai_text = response.choices[0].message.content
@@ -824,9 +840,9 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                         messages.append({"role": "user", "content": question})
 
                         response = openai_client.chat.completions.create(
-                            model="gpt-4o",
+                            model=CHAT_MODEL,
                             messages=messages,
-                            max_tokens=500,
+                            **({"max_completion_tokens": 500} if USE_AZURE else {"max_tokens": 500}),
                             temperature=0.7
                         )
                         ai_text = response.choices[0].message.content
@@ -885,9 +901,9 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                             messages.append({"role": "user", "content": question})
 
                             response = openai_client.chat.completions.create(
-                                model="gpt-4o",
+                                model=CHAT_MODEL,
                                 messages=messages,
-                                max_tokens=500,
+                                **({"max_completion_tokens": 500} if USE_AZURE else {"max_tokens": 500}),
                                 temperature=0.7
                             )
                             ai_text = response.choices[0].message.content
@@ -2260,12 +2276,12 @@ def generate_summary(
                 })
 
             response = openai_client.chat.completions.create(
-                model="gpt-4o",
+                model=CHAT_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content}
                 ],
-                max_tokens=1200,
+                **({"max_completion_tokens": 1200} if USE_AZURE else {"max_tokens": 1200}),
                 temperature=0.7
             )
             
@@ -3075,12 +3091,12 @@ def coordinator_group_analysis(
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=CHAT_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=800,
+            **({"max_completion_tokens": 800} if USE_AZURE else {"max_tokens": 800}),
             temperature=0.7
         )
         analysis_text = response.choices[0].message.content
@@ -3404,12 +3420,12 @@ def supervisor_group_analysis(
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model=CHAT_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=800,
+            **({"max_completion_tokens": 800} if USE_AZURE else {"max_tokens": 800}),
             temperature=0.7
         )
         analysis_text = response.choices[0].message.content
