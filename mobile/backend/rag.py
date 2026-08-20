@@ -26,9 +26,21 @@ def warm_reranker():
     _get_reranker()
 
 
-# Separate OpenAI client just for embeddings
-_openai_api_key = os.getenv("OPENAI_API_KEY")
-_embed_client = OpenAI(api_key=_openai_api_key) if _openai_api_key else None
+# Separate client just for embeddings — Azure if all three vars are set, otherwise plain OpenAI
+_azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+_azure_key = os.getenv("AZURE_OPENAI_API_KEY")
+_azure_embed_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
+
+if _azure_endpoint and _azure_key and _azure_embed_deployment:
+    _embed_client = OpenAI(
+        base_url=_azure_endpoint,
+        api_key=_azure_key
+    )
+    EMBED_MODEL = _azure_embed_deployment
+else:
+    _openai_api_key = os.getenv("OPENAI_API_KEY")
+    _embed_client = OpenAI(api_key=_openai_api_key) if _openai_api_key else None
+    EMBED_MODEL = "text-embedding-3-small"
 
 # None until first use — deferred so chromadb is never imported on PostgreSQL backends
 # (chromadb checks sqlite3 version at import time, which crashes on Azure's OS-level sqlite3)
@@ -74,9 +86,9 @@ def _get_collection(group_id):
 
 def _embed(texts):
     if not _embed_client:
-        raise RuntimeError("OPENAI_API_KEY not set — can't create embeddings")
+        raise RuntimeError("No embedding client configured — set either the Azure OpenAI variables or OPENAI_API_KEY")
     response = _embed_client.embeddings.create(
-        model="text-embedding-3-small",
+        model=EMBED_MODEL,
         input=texts
     )
     return [item.embedding for item in response.data]
