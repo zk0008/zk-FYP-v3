@@ -764,7 +764,7 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                     response = openai_client.chat.completions.create(
                         model=CHAT_MODEL,
                         messages=messages,
-                        **({"max_completion_tokens": 500} if USE_AZURE else {"max_tokens": 500}),
+                        **({"max_completion_tokens": 2500} if USE_AZURE else {"max_tokens": 2500}),
                         temperature=0.7
                     )
                     ai_text = response.choices[0].message.content
@@ -800,7 +800,7 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                     response = openai_client.chat.completions.create(
                         model=CHAT_MODEL,
                         messages=messages,
-                        **({"max_completion_tokens": 500} if USE_AZURE else {"max_tokens": 500}),
+                        **({"max_completion_tokens": 2500} if USE_AZURE else {"max_tokens": 2500}),
                         temperature=0.7
                     )
                     ai_text = response.choices[0].message.content
@@ -842,7 +842,7 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                         response = openai_client.chat.completions.create(
                             model=CHAT_MODEL,
                             messages=messages,
-                            **({"max_completion_tokens": 500} if USE_AZURE else {"max_tokens": 500}),
+                            **({"max_completion_tokens": 2500} if USE_AZURE else {"max_tokens": 2500}),
                             temperature=0.7
                         )
                         ai_text = response.choices[0].message.content
@@ -903,7 +903,7 @@ def generate_ai_reply(group_id: str, question: str, db_group_id: int, username: 
                             response = openai_client.chat.completions.create(
                                 model=CHAT_MODEL,
                                 messages=messages,
-                                **({"max_completion_tokens": 500} if USE_AZURE else {"max_tokens": 500}),
+                                **({"max_completion_tokens": 2500} if USE_AZURE else {"max_tokens": 2500}),
                                 temperature=0.7
                             )
                             ai_text = response.choices[0].message.content
